@@ -1,0 +1,535 @@
+"""
+Health OS Telegram Bot
+─────────────────────
+A personal health assistant bot backed by the Health OS system.
+Each message is handled by Claude with full Health OS context.
+
+Commands:
+  /start    — welcome & help
+  /daily    — morning check-in (Coach)
+  /status   — today's summary
+  /review   — weekly strategy review (Strategist)
+  /strategy — strategic CMO review
+  /labs     — upload lab results (Analyst)
+  /crisis   — crisis support (Behaviorist)
+  /role     — switch active role
+  /clear    — reset conversation history
+"""
+
+import asyncio
+import base64
+import logging
+import os
+from collections import defaultdict
+from datetime import time as dt_time
+from zoneinfo import ZoneInfo
+
+from dotenv import load_dotenv
+from openai import AsyncOpenAI, RateLimitError
+from telegram import Update
+from telegram.ext import (
+    Application,
+    CommandHandler,
+    MessageHandler,
+    filters,
+    ContextTypes,
+)
+import json
+
+load_dotenv()
+
+from context import build_system_prompt
+from tools import TOOLS, handle_tool
+import oura as oura_module
+
+# ─────────────────────────── Config ───────────────────────────
+
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
+OPENAI_KEY = os.getenv("OPENAI_API_KEY", "")
+_raw_ids = os.getenv("ALLOWED_USER_IDS", "")
+ALLOWED_IDS: set[int] = {int(x) for x in _raw_ids.split(",") if x.strip().isdigit()}
+
+# Daily Oura auto-sync time (Amsterdam time), default 10:00
+_sync_time_str = os.getenv("OURA_SYNC_TIME", "10:00")
+_sync_h, _sync_m = (int(x) for x in _sync_time_str.split(":"))
+OURA_SYNC_TIME = dt_time(_sync_h, _sync_m, tzinfo=ZoneInfo("Europe/Amsterdam"))
+
+logging.basicConfig(
+    format="%(asctime)s | %(levelname)s | %(message)s",
+    level=logging.INFO,
+)
+log = logging.getLogger(__name__)
+
+client = AsyncOpenAI(api_key=OPENAI_KEY)
+
+# Per-user conversation history (in-memory, resets on restart)
+_history: dict[int, list] = defaultdict(list)
+# Per-user active role
+_role: dict[int, str] = defaultdict(lambda: "coach")
+
+MAX_HISTORY = 30  # messages kept per user
+
+ROLES = {"coach", "strategist", "cmo", "analyst", "behaviorist"}
+
+HELP_TEXT = """\
+*Health OS Bot*
+
+Просто пиши что угодно — Coach отвечает по умолчанию.
+
+*Команды:*
+/daily — утренний чек-ин
+/status — сводка дня (калории, белок, тренировки)
+/review — недельная ревизия (Strategist)
+/strategy — стратегический review (CMO)
+/labs <данные> — загрузить анализы (Analyst)
+/oura [дата] — синхронизировать данные с кольцом
+/recipes — список всех сохранённых рецептов
+/crisis <ситуация> — кризисная поддержка (Behaviorist)
+/role <роль> — сменить роль
+/clear — очистить историю диалога
+
+*Роли:* coach · strategist · cmo · analyst · behaviorist
+"""
+
+
+# ─────────────────────────── Helpers ──────────────────────────
+
+def _allowed(update: Update) -> bool:
+    if not ALLOWED_IDS:
+        return True
+    return update.effective_user.id in ALLOWED_IDS
+
+
+async def _send(update: Update, text: str):
+    """Send text, splitting at 4000 chars to respect Telegram limits."""
+    for i in range(0, max(len(text), 1), 4000):
+        chunk = text[i : i + 4000]
+        await update.message.reply_text(chunk, parse_mode="Markdown")
+
+
+async def _claude(user_id: int, content: "str | list", role: str) -> str:
+    """
+    Call OpenAI with function-calling loop. Returns the final text response.
+    content can be a plain string or a multimodal list (for images).
+    Maintains per-user conversation history.
+    """
+    history = _history[user_id]
+    history.append({"role": "user", "content": content})
+
+    if len(history) > MAX_HISTORY:
+        history = history[-MAX_HISTORY:]
+        _history[user_id] = history
+
+    system = build_system_prompt(role)
+
+    # Agentic function-calling loop
+    while True:
+        for attempt in range(3):
+            try:
+                response = await client.chat.completions.create(
+                    model="gpt-4o",
+                    max_tokens=2048,
+                    tools=TOOLS,
+                    tool_choice="auto",
+                    messages=[{"role": "system", "content": system}] + history,
+                )
+                break
+            except RateLimitError as e:
+                if attempt == 2:
+                    raise
+                wait = 5 * (attempt + 1)
+                log.warning("Rate limit hit, retrying in %ss (attempt %d/3)", wait, attempt + 1)
+                await asyncio.sleep(wait)
+
+        message = response.choices[0].message
+
+        if message.tool_calls:
+            # Append assistant message (with tool_calls) to history
+            history.append(message.model_dump(exclude_unset=False))
+
+            # Execute each tool and append results
+            pending_images: list[str] = []  # base64 images from lab files
+
+            for tc in message.tool_calls:
+                args = json.loads(tc.function.arguments)
+                log.info("Tool call: %s %s", tc.function.name, args)
+                if tc.function.name == "sync_oura":
+                    result = await oura_module.handle_tool(args)
+                else:
+                    result = handle_tool(tc.function.name, args)
+
+                # Check if tool returned image data (lab files)
+                if isinstance(result, dict) and result.get("type") == "image":
+                    pending_images.append(result["data"])
+                    history.append({
+                        "role": "tool",
+                        "tool_call_id": tc.id,
+                        "content": f"Файл загружен: {result.get('filename')}. Изображение передано в чат для анализа.",
+                    })
+                elif isinstance(result, dict) and result.get("type") == "images":
+                    pending_images.extend(result["data"])
+                    history.append({
+                        "role": "tool",
+                        "tool_call_id": tc.id,
+                        "content": f"Файл загружен: {result.get('filename')} ({len(result['data'])} стр.). Изображения переданы в чат для анализа.",
+                    })
+                else:
+                    history.append(
+                        {
+                            "role": "tool",
+                            "tool_call_id": tc.id,
+                            "content": str(result),
+                        }
+                    )
+
+            # Inject lab images into conversation so the model can see them
+            if pending_images:
+                img_content: list = [{"type": "text", "text": "Изображения файла с анализами для визуального распознавания:"}]
+                for b64 in pending_images:
+                    img_content.append({
+                        "type": "image_url",
+                        "image_url": {"url": f"data:image/jpeg;base64,{b64}"},
+                    })
+                history.append({"role": "user", "content": img_content})
+        else:
+            text = message.content or "..."
+            history.append({"role": "assistant", "content": text})
+            return text
+
+
+# ─────────────────────────── Handlers ─────────────────────────
+
+async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if not _allowed(update):
+        return
+    await _send(update, HELP_TEXT)
+
+
+async def cmd_daily(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if not _allowed(update):
+        return
+    uid = update.effective_user.id
+    _role[uid] = "coach"
+    _history[uid] = []  # fresh context for daily check-in
+
+    await update.effective_chat.send_action("typing")
+    reply = await _claude(
+        uid,
+        "Сделай утренний чек-ин. Сначала синхронизируй Oura (сон, готовность, активность). "
+        "Потом покажи: сон из Oura, readiness score, бюджет на сегодня (калории, белок) и план тренировки.",
+        "coach",
+    )
+    await _send(update, reply)
+
+
+async def cmd_status(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if not _allowed(update):
+        return
+    uid = update.effective_user.id
+
+    await update.effective_chat.send_action("typing")
+    reply = await _claude(
+        uid,
+        "Покажи сводку дня: что съедено, остаток бюджета, тренировка выполнена?",
+        _role[uid],
+    )
+    await _send(update, reply)
+
+
+async def cmd_review(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if not _allowed(update):
+        return
+    uid = update.effective_user.id
+    _role[uid] = "strategist"
+    _history[uid] = []
+
+    await update.effective_chat.send_action("typing")
+    reply = await _claude(
+        uid,
+        "Сделай недельную ревизию: compliance по питанию и тренировкам, тренды веса, рекомендации.",
+        "strategist",
+    )
+    await _send(update, reply)
+
+
+async def cmd_strategy(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if not _allowed(update):
+        return
+    uid = update.effective_user.id
+    _role[uid] = "cmo"
+    _history[uid] = []
+
+    await update.effective_chat.send_action("typing")
+    reply = await _claude(
+        uid,
+        "Проведи стратегический review. Оцени риски по Four Horsemen, проверь актуальность директив.",
+        "cmo",
+    )
+    await _send(update, reply)
+
+
+async def cmd_labs(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if not _allowed(update):
+        return
+    uid = update.effective_user.id
+    _role[uid] = "analyst"
+    _history[uid] = []
+
+    data = " ".join(ctx.args) if ctx.args else ""
+    prompt = (
+        f"Проанализируй результаты анализов и обнови biomarkers.yaml. Данные: {data}"
+        if data
+        else "Жду результаты анализов. Отправь данные текстом или фото."
+    )
+
+    await update.effective_chat.send_action("typing")
+    reply = await _claude(uid, prompt, "analyst")
+    await _send(update, reply)
+
+
+async def cmd_crisis(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if not _allowed(update):
+        return
+    uid = update.effective_user.id
+    _role[uid] = "behaviorist"
+
+    situation = " ".join(ctx.args) if ctx.args else ""
+    prompt = f"Нужна поддержка. {situation}" if situation else "Нужна поддержка."
+
+    await update.effective_chat.send_action("typing")
+    reply = await _claude(uid, prompt, "behaviorist")
+    await _send(update, reply)
+
+
+async def cmd_role(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if not _allowed(update):
+        return
+    uid = update.effective_user.id
+
+    if not ctx.args or ctx.args[0] not in ROLES:
+        current = _role[uid]
+        await update.message.reply_text(
+            f"Текущая роль: *{current}*\n\nДоступные роли: {', '.join(sorted(ROLES))}",
+            parse_mode="Markdown",
+        )
+        return
+
+    _role[uid] = ctx.args[0]
+    await update.message.reply_text(f"Роль переключена: *{ctx.args[0]}*", parse_mode="Markdown")
+
+
+async def cmd_clear(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if not _allowed(update):
+        return
+    uid = update.effective_user.id
+    _history[uid] = []
+    await update.message.reply_text("История диалога очищена.")
+
+
+async def cmd_recipes(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Show all saved recipes grouped by category."""
+    if not _allowed(update):
+        return
+    import yaml
+    from pathlib import Path
+    recipes_path = Path(__file__).parent.parent / "data/tactical/nutrition/recipes.yaml"
+    if not recipes_path.exists():
+        await update.message.reply_text("Рецептов пока нет.")
+        return
+    with open(recipes_path, encoding="utf-8") as f:
+        data = yaml.safe_load(f) or {}
+    recipes = data.get("recipes", [])
+    if not recipes:
+        await update.message.reply_text("Рецептов пока нет.")
+        return
+
+    # Group by category
+    from collections import defaultdict
+    by_cat = defaultdict(list)
+    for r in recipes:
+        cat = r.get("category") or "Другое"
+        by_cat[cat].append(r)
+
+    lines = [f"*Рецепты* — {len(recipes)} шт.\n"]
+    for cat, items in by_cat.items():
+        lines.append(f"*{cat}*")
+        for r in items:
+            est = " _(~)_" if r.get("estimated") else ""
+            gi = f", ГИ {r['glycemic_index']}" if r.get("glycemic_index") else ""
+            lines.append(
+                f"• {r['name']}{est} — {r['calories']} ккал, "
+                f"{r['protein']}г белка{gi} / {r['serving_g']}г"
+            )
+        lines.append("")
+
+    lines.append("_(~) = оценочные данные, уточняются при логировании_")
+    await _send(update, "\n".join(lines))
+
+
+async def cmd_oura(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Manually sync Oura data and show summary."""
+    if not _allowed(update):
+        return
+    uid = update.effective_user.id
+
+    d = ctx.args[0] if ctx.args else None
+    await update.effective_chat.send_action("typing")
+    reply = await _claude(
+        uid,
+        f"Синхронизируй данные из Oura Ring{' за ' + d if d else ' за сегодня'}. "
+        "Покажи сон, готовность, активность и Zone 2 минуты. Запиши сон в лог.",
+        _role[uid],
+    )
+    await _send(update, reply)
+
+
+async def handle_photo(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Handle food/lab photos sent by the user."""
+    if not _allowed(update):
+        return
+
+    uid = update.effective_user.id
+    role = _role[uid]
+
+    await update.effective_chat.send_action("typing")
+
+    # Download the highest-resolution version of the photo
+    photo = update.message.photo[-1]
+    tg_file = await ctx.bot.get_file(photo.file_id)
+    photo_bytes = await tg_file.download_as_bytearray()
+    b64 = base64.standard_b64encode(bytes(photo_bytes)).decode()
+
+    # Caption text the user may have added to the photo
+    caption = update.message.caption or ""
+
+    if role == "analyst":
+        prompt = (
+            "Это результаты анализов. Распознай все показатели, "
+            "сравни с оптимальными значениями по Attia и дай оценку. "
+            + (f"Комментарий пользователя: {caption}" if caption else "")
+        )
+    else:
+        prompt = (
+            "На фото еда. Определи продукты, оцени граммовки и КБЖУ. "
+            "Залогируй каждый компонент через log_food и покажи остаток бюджета. "
+            + (f"Комментарий пользователя: {caption}" if caption else "")
+        )
+
+    # Build multimodal content: image + text (OpenAI format)
+    content = [
+        {
+            "type": "image_url",
+            "image_url": {"url": f"data:image/jpeg;base64,{b64}"},
+        },
+        {"type": "text", "text": prompt},
+    ]
+
+    try:
+        reply = await _claude(uid, content, role)
+    except Exception as e:
+        log.exception("Claude photo error: %s", e)
+        reply = f"Не удалось обработать фото: {e}"
+
+    await _send(update, reply)
+
+
+async def handle_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if not _allowed(update):
+        return
+
+    uid = update.effective_user.id
+    text = update.message.text or ""
+    role = _role[uid]
+
+    await update.effective_chat.send_action("typing")
+
+    try:
+        reply = await _claude(uid, text, role)
+    except Exception as e:
+        log.exception("Claude error: %s", e)
+        reply = f"Ошибка: {e}\n\nПопробуй ещё раз или /clear чтобы сбросить историю."
+
+    await _send(update, reply)
+
+
+# ─────────────────────── Scheduled jobs ───────────────────────
+
+async def _daily_oura_sync(context: ContextTypes.DEFAULT_TYPE):
+    """Fetch Oura data automatically each morning and notify allowed users."""
+    from datetime import date
+    d = date.today().isoformat()
+    try:
+        data = await oura_module.handle_tool({"date": d, "write_to_log": True})
+        sleep = data.get("sleep", {})
+        readiness = data.get("readiness", {})
+        activity = data.get("activity", {})
+        stress = data.get("stress", {})
+
+        lines = [f"*Oura синхронизирован* — {d}"]
+        if sleep.get("hours"):
+            lines.append(
+                f"Сон: {sleep['hours']}ч"
+                + (f", score {sleep['score']}" if sleep.get("score") else "")
+                + (f", HRV {sleep['avg_hrv']}" if sleep.get("avg_hrv") else "")
+                + (f", resting HR {sleep['resting_hr']}" if sleep.get("resting_hr") else "")
+            )
+        if readiness.get("score") is not None:
+            lines.append(f"Готовность: {readiness['score']}")
+        if activity.get("steps"):
+            lines.append(
+                f"Шаги: {activity['steps']}"
+                + (f", Zone2 {activity['zone2_min']} мин" if activity.get("zone2_min") else "")
+                + (f", {activity['active_calories']} ккал" if activity.get("active_calories") else "")
+            )
+        if stress.get("summary"):
+            lines.append(f"Стресс: {stress['summary']}")
+
+        msg = "\n".join(lines)
+        log.info("daily_oura_sync ok: %s", d)
+    except Exception as e:
+        log.error("daily_oura_sync error: %s", e)
+        msg = f"Не удалось синхронизировать Oura: {e}"
+
+    for uid in ALLOWED_IDS:
+        try:
+            await context.bot.send_message(uid, msg, parse_mode="Markdown")
+        except Exception as exc:
+            log.warning("Could not notify user %s: %s", uid, exc)
+
+
+# ─────────────────────────── Main ─────────────────────────────
+
+def main():
+    if not TELEGRAM_TOKEN:
+        raise SystemExit("TELEGRAM_BOT_TOKEN not set in .env")
+    if not OPENAI_KEY:
+        raise SystemExit("OPENAI_API_KEY not set in .env")
+
+    app = Application.builder().token(TELEGRAM_TOKEN).build()
+
+    app.add_handler(CommandHandler("start", cmd_start))
+    app.add_handler(CommandHandler("daily", cmd_daily))
+    app.add_handler(CommandHandler("status", cmd_status))
+    app.add_handler(CommandHandler("review", cmd_review))
+    app.add_handler(CommandHandler("strategy", cmd_strategy))
+    app.add_handler(CommandHandler("labs", cmd_labs))
+    app.add_handler(CommandHandler("oura", cmd_oura))
+    app.add_handler(CommandHandler("recipes", cmd_recipes))
+    app.add_handler(CommandHandler("crisis", cmd_crisis))
+    app.add_handler(CommandHandler("role", cmd_role))
+    app.add_handler(CommandHandler("clear", cmd_clear))
+    app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+
+    # Daily Oura auto-sync
+    app.job_queue.run_daily(_daily_oura_sync, time=OURA_SYNC_TIME)
+    log.info(
+        "Health OS Bot started. Allowed users: %s. Oura sync at %s daily.",
+        ALLOWED_IDS or "everyone",
+        OURA_SYNC_TIME.strftime("%H:%M"),
+    )
+    app.run_polling(drop_pending_updates=True)
+
+
+if __name__ == "__main__":
+    main()

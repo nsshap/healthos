@@ -1,0 +1,32 @@
+# Secrets
+bot/.env
+config/oura_token.txt
+
+# Runtime data (logs generated daily)
+data/oura/
+data/tactical/logs/
+
+# Medical files (PDFs, images)
+blood tests/
+glucose level/
+other tests/
+data/tactical/nutrition/photos/
+
+# Large binary files
+*.HEIC
+*.heic
+
+# Python
+bot/venv/
+**/__pycache__/
+*.pyc
+*.pyo
+
+# macOS
+.DS_Store
+**/.DS_Store
+
+# Editors
+.idea/
+.vscode/
+scripts/repo_check.log

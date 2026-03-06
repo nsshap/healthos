@@ -1,0 +1,72 @@
+metadata:
+  generated_at: 2026-02-25
+  valid_until: 2026-05-25   # пересмотр через 3 месяца или после новых анализов
+  based_on_labs: 2025-07-01  # самые свежие: Serbia Jul 2025 + Medsi Dec 2024 + CGM Feb 2026
+  critical_gap: "ApoB, Lp(a), HbA1c — НЕ СДАВАЛИСЬ. Сдать до следующего пересмотра директив."
+
+active_modes:
+  primary: body_composition
+  secondary: longevity
+  weights:
+    body_composition: 4
+    longevity: 3
+    cognitive_performance: 2
+    athletic_performance: 1
+
+constraints:
+  nutrition:
+    # LDL растёт (3.3 → 4.0 ммоль/л за 7 мес) — ограничиваем насыщенные жиры
+    saturated_fat_limit_g: 10   # на основании растущего LDL (без ApoB это консервативная мера)
+    omega3_minimum_g: 3         # увеличено с 2г — EPA+DHA для снижения TG и воспаления
+    added_sugar_limit_g: 25     # CGM показывает реактивный паттерн + гипо-эпизоды
+    fast_carbs_restrict: true   # избегать быстрых углеводов без белка/клетчатки
+    meal_skipping_forbidden: true  # пропуск еды → гипо (видно на CGM)
+    protein_with_every_meal: true  # белок + клетчатка замедляют всасывание глюкозы
+    protein_minimum_g: 143      # 2.2 г/кг — приоритет на дефиците
+    iron_rich_foods: maintain   # ферритин 53.34 — норма достигнута, поддерживаем уровень
+    vitamin_d_supplement: required   # D3: 25.8 нг/мл → цель >40. Дозу уточнить с врачом.
+    ldl_notes: >
+      LDL 4.0 ммоль/л (↑ с 3.3 за 7 мес). Ограничить: жирное красное мясо, сливочное масло,
+      твёрдые сыры, пальмовое/кокосовое масло. Акцент: рыба (омега-3), оливковое масло,
+      орехи, бобовые, клетчатка (овёс, бобовые снижают LDL).
+
+  training:
+    min_zone2_minutes_week: 90   # 3×30 мин — минимум (низкоударно: велосипед, плавание, ходьба)
+    min_strength_sessions_week: 3  # пилатес
+    banned_exercises:
+      - бег
+      - прыжки
+      - jumping_jacks
+      - box_jumps
+      - high_impact_cardio
+      - тяжёлые приседания с осевой нагрузкой  # металлическое бедро, уточнить у ортопеда
+    temporary_avoid: []
+    preferred_modalities:
+      - пилатес (текущее — основа)
+      - плавание
+      - велосипед (зал или улица)
+      - ходьба быстрая (zone 2, ровная поверхность)
+
+  sleep:
+    target_hours_min: 7
+    bedtime_variance_max_min: 30
+    caffeine_cutoff_hours: 10
+
+  supplements_recommended:
+    - vitamin_D3: "продолжать суплементацию, цель >40 нг/мл (сейчас 25.8). Дозу с врачом."
+    - omega3: "3г EPA+DHA/день (увеличено из-за LDL)"
+    - iron: "мониторить — ферритин 53.34 норм. Дополнительно не нужно."
+
+monitoring:
+  daily: [sleep_hours, weight_morning, protein_g, energy_level]
+  weekly: [weight_trend, training_compliance, zone2_minutes, sat_fat_g]
+  labs_next:
+    priority_CRITICAL:
+      - ApoB          # LDL растёт — без ApoB нельзя оценить реальный CVD-риск
+      - Lp_a          # генетический маркер, сдаётся один раз
+      - HbA1c         # не сдавала с 2020 (5 лет!), CGM показывает реактивный паттерн
+    priority_high:
+      - vitamin_D_recheck   # цель >40 нг/мл, сейчас 25.8
+      - sex_hormones        # E2, прогестерон, тестостерон (38 лет)
+      - ferritin_recheck    # контроль стабильности через 6 мес
+    when: "ApoB+Lp(a)+HbA1c — при следующем плановом визите к врачу (приоритет)"

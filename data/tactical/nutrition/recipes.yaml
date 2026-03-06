@@ -1,0 +1,321 @@
+recipes:
+- added: '2026-03-05'
+  aliases:
+  - овсянка с фруктами
+  - oatmeal with fruit
+  - овсяная каша с фруктами
+  calories: 380
+  carbs: 68
+  category: Завтрак
+  estimated: true
+  fat: 7
+  glycemic_index: 55
+  ingredients: 80г овсяных хлопьев, 150мл молока, 100г фруктов (банан/яблоко/ягоды)
+  name: Овсянка с фруктами
+  protein: 12
+  serving_g: 300
+- added: '2026-03-05'
+  aliases:
+  - тост с яйцом
+  - whole grain toast with egg
+  - тост яйцо
+  calories: 380
+  carbs: 35
+  category: Завтрак
+  estimated: true
+  fat: 15
+  glycemic_index: 45
+  ingredients: 2 ломтя цельнозернового хлеба (~80г), 2 яйца, немного масла
+  name: Цельнозерновой тост с яйцом
+  protein: 20
+  serving_g: 200
+- added: '2026-03-05'
+  aliases:
+  - йогурт гранола
+  - yogurt with granola
+  - yogurt granola
+  calories: 340
+  carbs: 52
+  category: Завтрак
+  estimated: true
+  fat: 8
+  glycemic_index: 50
+  ingredients: 130г греческого йогурта, 50г гранолы, 20г мёда
+  name: Йогурт с гранолой
+  protein: 14
+  serving_g: 200
+- added: '2026-03-05'
+  aliases:
+  - фрукт
+  - fruit snack
+  - свежие фрукты
+  calories: 120
+  carbs: 28
+  category: Перекус
+  estimated: true
+  fat: 0.5
+  glycemic_index: 50
+  ingredients: 200г смешанных фруктов (яблоко, груша, банан и т.д.)
+  name: Фрукты
+  protein: 1.5
+  serving_g: 200
+- added: '2026-03-05'
+  aliases:
+  - nuts
+  - горсть орехов
+  - орешки
+  calories: 185
+  carbs: 5
+  category: Перекус
+  estimated: true
+  fat: 17
+  glycemic_index: 15
+  ingredients: 30г смеси орехов (миндаль, кешью, грецкий)
+  name: Орехи
+  protein: 5
+  serving_g: 30
+- added: '2026-03-05'
+  aliases:
+  - овощи нарезка
+  - vegetable sticks
+  - морковь огурец
+  calories: 55
+  carbs: 10
+  category: Перекус
+  estimated: true
+  fat: 0.5
+  glycemic_index: 35
+  ingredients: 150г нарезанных овощей (морковь, огурец, сельдерей, перец)
+  name: Овощные палочки
+  protein: 2
+  serving_g: 150
+- added: '2026-03-05'
+  aliases:
+  - pasta with lentils
+  - паста чечевица
+  - lentil pasta
+  calories: 480
+  carbs: 88
+  category: Обед
+  estimated: true
+  fat: 5
+  glycemic_index: 45
+  ingredients: 100г пасты, 100г чечевицы варёной, томатный соус, овощи
+  name: Паста с чечевицей
+  protein: 22
+  serving_g: 350
+- added: '2026-03-05'
+  aliases:
+  - rice chicken vegetables
+  - рис куриная грудка овощи
+  - бурый рис курица
+  calories: 520
+  carbs: 68
+  category: Обед
+  estimated: true
+  fat: 8
+  glycemic_index: 50
+  ingredients: 120г бурого риса, 150г куриной грудки, 130г овощей
+  name: Бурый рис с курицей и овощами
+  protein: 38
+  serving_g: 400
+- added: '2026-03-05'
+  aliases:
+  - sandwich
+  - сэндвичи
+  - бутерброд
+  calories: 420
+  carbs: 50
+  category: Обед
+  estimated: true
+  fat: 14
+  glycemic_index: 50
+  ingredients: 2 ломтя цельнозернового хлеба, 80г белка (курица/тунец), овощи, соус
+  name: Сэндвич
+  protein: 20
+  serving_g: 200
+- added: '2026-03-05'
+  aliases:
+  - greek yogurt
+  - греческий йогурт
+  - йогурт натуральный
+  calories: 135
+  carbs: 8
+  category: Полдник
+  estimated: true
+  fat: 5
+  glycemic_index: 30
+  ingredients: 150г греческого йогурта (2–5% жирности)
+  name: Йогурт
+  protein: 14
+  serving_g: 150
+- added: '2026-03-05'
+  aliases:
+  - smoothie
+  - фруктовый смузи
+  - смузи с йогуртом
+  calories: 220
+  carbs: 40
+  category: Полдник
+  estimated: true
+  fat: 3
+  glycemic_index: 50
+  ingredients: 100г йогурта, 150г фруктов/ягод, 100мл молока или воды
+  name: Смузи
+  protein: 8
+  serving_g: 350
+- added: '2026-03-05'
+  aliases:
+  - boiled egg
+  - яйцо вареное
+  - яйцо
+  - egg
+  calories: 78
+  carbs: 0.5
+  category: Полдник
+  estimated: true
+  fat: 5
+  glycemic_index: null
+  ingredients: 1 варёное яйцо (~55г)
+  name: Варёное яйцо
+  protein: 7
+  serving_g: 55
+- added: '2026-03-05'
+  aliases:
+  - stir fry
+  - stir-fry
+  - жарка с овощами
+  - вок
+  calories: 380
+  carbs: 38
+  category: Ужин
+  estimated: true
+  fat: 12
+  glycemic_index: 45
+  ingredients: 150г белка (курица/говядина/тофу), 200г смеси овощей, соус, масло
+  name: Стир-фрай
+  protein: 28
+  serving_g: 350
+- added: '2026-03-05'
+  aliases:
+  - soup with bread
+  - суп хлеб
+  - крем-суп
+  calories: 350
+  carbs: 52
+  category: Ужин
+  estimated: true
+  fat: 8
+  glycemic_index: 50
+  ingredients: 350мл супа, 1 ломоть цельнозернового хлеба (~50г)
+  name: Суп с хлебом
+  protein: 15
+  serving_g: 400
+- added: '2026-03-05'
+  aliases:
+  - baked salmon with potatoes
+  - лосось картофель
+  - salmon potato
+  - запечённый лосось
+  calories: 480
+  carbs: 38
+  category: Ужин
+  estimated: true
+  fat: 16
+  glycemic_index: 55
+  ingredients: 180г лосося, 170г картофеля запечённого, специи
+  name: Запечённый лосось с картофелем
+  protein: 38
+  serving_g: 350
+- added: '2026-03-05'
+  aliases:
+  - frozen grapes
+  - виноград замороженный
+  - виноград
+  calories: 67
+  carbs: 17
+  category: Десерт
+  estimated: true
+  fat: 0.2
+  glycemic_index: 46
+  ingredients: 100г замороженного винограда
+  name: Замороженный виноград
+  protein: 0.6
+  serving_g: 100
+- added: '2026-03-05'
+  aliases:
+  - yogurt with berries
+  - йогурт ягоды
+  - greek yogurt berries
+  calories: 160
+  carbs: 18
+  category: Десерт
+  estimated: true
+  fat: 4
+  glycemic_index: 35
+  ingredients: 150г греческого йогурта, 50г ягод (клубника/черника/малина)
+  name: Йогурт с ягодами
+  protein: 12
+  serving_g: 200
+- added: '2026-03-05'
+  aliases:
+  - date cacao balls
+  - финиковые шарики
+  - энергетические шарики
+  - energy balls
+  calories: 190
+  carbs: 24
+  category: Десерт
+  estimated: true
+  fat: 9
+  glycemic_index: 55
+  ingredients: 3 финика, 15г какао-порошка, 20г орехов, 5г кокосовой стружки (2 шарика)
+  name: Финиково-какао энергетические шарики
+  protein: 4
+  serving_g: 60
+- added: '2026-03-05'
+  aliases:
+  - кефир, протеин, голубика, чиа
+  calories: 223
+  carbs: 20
+  fat: 6
+  glycemic_index: 38
+  ingredients: Кефир 250 мл, 2 ст.л. протеина, горсть голубики, 1 ст.л. семян чиа
+  name: Кефир с протеином и фруктами
+  protein: 25
+  serving_g: 300
+- added: '2026-03-05'
+  aliases:
+  - кофе кружка овсяное молоко
+  calories: 73
+  carbs: 38
+  estimated: false
+  fat: 5
+  glycemic_index: 50
+  ingredients: Кофе 2 кружки, овсяное молоко
+  name: Кофе с овсяным молоком
+  protein: 0
+  serving_g: 400
+  updated: '2026-03-05'
+- added: '2026-03-05'
+  aliases:
+  - булочка корица десерт
+  calories: 250
+  carbs: 40
+  fat: 10
+  glycemic_index: 65
+  ingredients: Булочка с корицей
+  name: Булочка с корицей
+  protein: 4
+  serving_g: 100
+- added: '2026-03-05'
+  aliases:
+  - макароны фета курица
+  calories: 440
+  carbs: 48
+  fat: 16
+  glycemic_index: 50
+  ingredients: Макароны, фета, помидоры 100 г, курица тушеная 100 г
+  name: Макароны с фетой и курицей
+  protein: 41
+  serving_g: 300
