@@ -1,14 +1,16 @@
 """
 Tool definitions for OpenAI function-calling API and their implementations.
-These tools allow the model to read/write Health OS log files.
+Recipes and daily logs are read/written via Supabase (db.py).
+Lab files (PDFs, images) are still read from local filesystem.
 """
 from pathlib import Path
 from datetime import date, datetime
 import base64
 import yaml
 
+import db
+
 BASE = Path(__file__).parent.parent
-RECIPES_FILE = BASE / "data/tactical/nutrition/recipes.yaml"
 
 LAB_DIRS = {
     "blood_tests": BASE / "blood tests",
@@ -16,33 +18,6 @@ LAB_DIRS = {
     "other":       BASE / "other tests",
 }
 LAB_EXTENSIONS = {".pdf", ".jpeg", ".jpg", ".png"}
-
-
-def _log_path(d: str = None) -> Path:
-    d = d or date.today().isoformat()
-    return BASE / f"data/tactical/logs/{d}.yaml"
-
-
-def _read_log(d: str = None) -> dict:
-    path = _log_path(d)
-    if path.exists():
-        with open(path, encoding="utf-8") as f:
-            return yaml.safe_load(f) or {}
-    return {
-        "date": d or date.today().isoformat(),
-        "weight_morning": None,
-        "meals": [],
-        "training": [],
-        "sleep": None,
-        "notes": "",
-    }
-
-
-def _write_log(data: dict, d: str = None):
-    path = _log_path(d)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "w", encoding="utf-8") as f:
-        yaml.dump(data, f, allow_unicode=True, default_flow_style=False)
 
 
 def _get_targets() -> dict:
@@ -266,7 +241,7 @@ TOOLS = [
 
 def handle_tool(name: str, args: dict) -> dict:
     if name == "log_food":
-        log = _read_log()
+        log = db.get_log()
         if "meals" not in log:
             log["meals"] = []
 
@@ -277,7 +252,7 @@ def handle_tool(name: str, args: dict) -> dict:
             "protein": args["protein"],
         }
         log["meals"].append(meal)
-        _write_log(log)
+        db.upsert_log(log["date"], log)
 
         targets = _get_targets()
         total_cal = sum(m.get("calories", 0) for m in log["meals"])
@@ -293,7 +268,7 @@ def handle_tool(name: str, args: dict) -> dict:
         }
 
     if name == "log_workout":
-        log = _read_log()
+        log = db.get_log()
         if "training" not in log:
             log["training"] = []
 
@@ -308,11 +283,11 @@ def handle_tool(name: str, args: dict) -> dict:
             workout["notes"] = args["notes"]
 
         log["training"].append(workout)
-        _write_log(log)
+        db.upsert_log(log["date"], log)
         return {"logged": workout, "success": True}
 
     if name == "log_sleep":
-        log = _read_log()
+        log = db.get_log()
         log["sleep"] = {
             "hours": args["hours"],
             "quality": args.get("quality", "ok"),
@@ -321,17 +296,17 @@ def handle_tool(name: str, args: dict) -> dict:
             log["sleep"]["bed_time"] = args["bed_time"]
         if "wake_time" in args:
             log["sleep"]["wake_time"] = args["wake_time"]
-        _write_log(log)
+        db.upsert_log(log["date"], log)
         return {"logged": log["sleep"], "success": True}
 
     if name == "log_weight":
-        log = _read_log()
+        log = db.get_log()
         log["weight_morning"] = args["weight_kg"]
-        _write_log(log)
+        db.upsert_log(log["date"], log)
         return {"logged": args["weight_kg"], "success": True}
 
     if name == "get_today_summary":
-        log = _read_log()
+        log = db.get_log()
         targets = _get_targets()
         meals = log.get("meals", [])
         total_cal = sum(m.get("calories", 0) for m in meals)
@@ -372,7 +347,6 @@ def handle_tool(name: str, args: dict) -> dict:
         path = LAB_DIRS.get(category, LAB_DIRS["blood_tests"]) / filename
 
         if not path.exists():
-            # Try searching all dirs
             for d in LAB_DIRS.values():
                 candidate = d / filename
                 if candidate.exists():
@@ -383,13 +357,11 @@ def handle_tool(name: str, args: dict) -> dict:
 
         suffix = path.suffix.lower()
 
-        # JPEG / PNG — return base64 for vision
         if suffix in (".jpeg", ".jpg", ".png"):
             data = path.read_bytes()
             b64 = base64.standard_b64encode(data).decode()
             return {"type": "image", "data": b64, "filename": filename}
 
-        # PDF — try text extraction first
         if suffix == ".pdf":
             try:
                 import pypdf
@@ -402,13 +374,12 @@ def handle_tool(name: str, args: dict) -> dict:
             except Exception:
                 pass
 
-            # Fall back to image rendering (scanned PDFs)
             try:
-                import fitz  # pymupdf
+                import fitz
                 doc = fitz.open(str(path))
                 images = []
                 for i, page in enumerate(doc):
-                    if i >= 5:  # max 5 pages
+                    if i >= 5:
                         break
                     pix = page.get_pixmap(dpi=150)
                     b64 = base64.standard_b64encode(pix.tobytes("jpeg")).decode()
@@ -421,7 +392,7 @@ def handle_tool(name: str, args: dict) -> dict:
         return {"error": f"Неподдерживаемый формат: {suffix}"}
 
     if name == "edit_food_log":
-        log = _read_log()
+        log = db.get_log()
         meals = log.get("meals", [])
         if not meals:
             return {"updated": False, "reason": "Нет залогированных приёмов пищи сегодня"}
@@ -437,7 +408,7 @@ def handle_tool(name: str, args: dict) -> dict:
             if field in args and args[field] is not None:
                 meal[field] = args[field]
 
-        _write_log(log)
+        db.upsert_log(log["date"], log)
 
         targets = _get_targets()
         total_cal = sum(m.get("calories", 0) for m in meals)
@@ -455,54 +426,36 @@ def handle_tool(name: str, args: dict) -> dict:
         }
 
     if name == "update_recipe":
-        target = args.get("name", "").lower().strip()
-        if not RECIPES_FILE.exists():
-            return {"updated": False, "reason": "recipes file not found"}
-        with open(RECIPES_FILE, encoding="utf-8") as f:
-            data = yaml.safe_load(f) or {}
-        recipes = data.get("recipes", [])
-        for r in recipes:
-            candidates = [r.get("name", "").lower()] + [a.lower() for a in (r.get("aliases") or [])]
-            if target in candidates or any(target in c or c in target for c in candidates):
-                updatable = ["serving_g", "calories", "protein", "fat", "carbs",
-                             "glycemic_index", "ingredients", "aliases"]
-                changed = {}
-                for field in updatable:
-                    if field in args and args[field] is not None:
-                        changed[field] = args[field]
-                        r[field] = args[field]
-                r["estimated"] = False
-                r["updated"] = date.today().isoformat()
-                data["recipes"] = recipes
-                with open(RECIPES_FILE, "w", encoding="utf-8") as f:
-                    yaml.dump(data, f, allow_unicode=True, default_flow_style=False)
-                return {"updated": True, "name": r["name"], "changed_fields": changed}
-        return {"updated": False, "reason": "recipe not found", "query": args["name"]}
+        target_name = args.get("name", "").lower().strip()
+        recipe = db.lookup_recipe(target_name)
+        if not recipe:
+            return {"updated": False, "reason": "recipe not found", "query": args["name"]}
+
+        updatable = ["serving_g", "calories", "protein", "fat", "carbs",
+                     "glycemic_index", "ingredients", "aliases"]
+        changes = {}
+        for field in updatable:
+            if field in args and args[field] is not None:
+                changes[field] = args[field]
+        changes["estimated"] = False
+        changes["updated"] = date.today().isoformat()
+
+        db.update_recipe_by_id(recipe["id"], changes)
+        return {"updated": True, "name": recipe["name"], "changed_fields": changes}
 
     if name == "lookup_recipe":
-        query = args.get("query", "").lower().strip()
-        if not RECIPES_FILE.exists():
-            return {"found": False, "query": query}
-        with open(RECIPES_FILE, encoding="utf-8") as f:
-            data = yaml.safe_load(f) or {}
-        recipes = data.get("recipes", [])
-        # Match by name or any alias (substring)
-        for r in recipes:
-            candidates = [r.get("name", "").lower()] + [a.lower() for a in (r.get("aliases") or [])]
-            if any(query in c or c in query for c in candidates):
-                return {"found": True, "recipe": r}
-        return {"found": False, "query": query, "total_recipes": len(recipes)}
+        query = args.get("query", "")
+        recipe = db.lookup_recipe(query)
+        if recipe:
+            return {"found": True, "recipe": recipe}
+        total = len(db.get_all_recipes())
+        return {"found": False, "query": query, "total_recipes": total}
 
     if name == "save_recipe":
-        with open(RECIPES_FILE, encoding="utf-8") as f:
-            data = yaml.safe_load(f) or {}
-        recipes = data.get("recipes", [])
-
-        # Dedup: skip if same name already exists
-        new_name = args.get("name", "").lower()
-        for r in recipes:
-            if r.get("name", "").lower() == new_name:
-                return {"saved": False, "reason": "already_exists", "name": args["name"]}
+        # Dedup check
+        existing = db.lookup_recipe(args.get("name", ""))
+        if existing and existing.get("name", "").lower() == args.get("name", "").lower():
+            return {"saved": False, "reason": "already_exists", "name": args["name"]}
 
         entry = {
             "name": args["name"],
@@ -516,10 +469,8 @@ def handle_tool(name: str, args: dict) -> dict:
             "ingredients": args.get("ingredients", ""),
             "added": date.today().isoformat(),
         }
-        recipes.append(entry)
-        data["recipes"] = recipes
-        with open(RECIPES_FILE, "w", encoding="utf-8") as f:
-            yaml.dump(data, f, allow_unicode=True, default_flow_style=False)
-        return {"saved": True, "name": args["name"], "total_recipes": len(recipes)}
+        db.insert_recipe(entry)
+        total = len(db.get_all_recipes())
+        return {"saved": True, "name": args["name"], "total_recipes": total}
 
     return {"error": f"Unknown tool: {name}"}

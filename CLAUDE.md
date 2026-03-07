@@ -401,3 +401,52 @@ description: "Поддержка при срывах, тяге, пропуска
 6. Если нет — оставь nutrition constraints как `null`
 
 Готово. Пользователь может начинать с `/health-daily`.
+
+---
+
+## Supabase Sync
+
+Рецепты, ежедневные логи и данные Oura хранятся в Supabase как единый источник истины.
+Статичные файлы (`user_profile.yaml`, `directives.yaml`, `strategy.md`, `program.yaml`, `biomarkers.yaml`) хранятся локально.
+
+### Что куда идёт
+
+| Данные | Хранение | Кто пишет |
+|--------|----------|-----------|
+| Рецепты | Supabase `recipes` | Бот + локальный push |
+| Ежедневные логи | Supabase `daily_logs` | Бот + Oura sync |
+| Данные Oura | Supabase `oura_data` | Бот + oura_sync.py |
+| Биомаркеры, анализы | `data/strategic/biomarkers.yaml` | Claude Code + ручной push |
+| Профиль, директивы, стратегия | локальные файлы | Claude Code |
+
+### Команды синка
+
+```bash
+# Залить локальные данные → Supabase
+python3 scripts/migrate_to_supabase.py --only recipes   # все рецепты
+python3 scripts/migrate_to_supabase.py --only logs      # все логи
+python3 scripts/migrate_to_supabase.py                  # всё сразу
+
+# Скачать из Supabase → локальные файлы
+python3 scripts/pull_from_supabase.py --only recipes    # рецепты
+python3 scripts/pull_from_supabase.py --only logs       # логи за 90 дней
+python3 scripts/pull_from_supabase.py                   # всё сразу
+```
+
+### Правило для Claude Code
+
+**Когда обновляется `biomarkers.yaml`** (новые анализы через `/health-labs` или вручную) — спроси пользователя:
+> «Хочешь залить биомаркеры в Supabase? Это нужно чтобы бот в Telegram тоже видел свежие данные.»
+
+Если да — выполни:
+```bash
+python3 scripts/migrate_to_supabase.py --only biomarkers
+```
+
+**Когда обновляется `recipes.yaml` вручную** — спроси:
+> «Синхронизировать рецепты в Supabase?»
+
+Если да:
+```bash
+python3 scripts/migrate_to_supabase.py --only recipes
+```

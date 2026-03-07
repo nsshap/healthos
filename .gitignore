@@ -1,4 +1,5 @@
 # Secrets
+.env
 bot/.env
 config/oura_token.txt
 

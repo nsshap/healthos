@@ -1,12 +1,15 @@
 """
-Loads Health OS data files and builds system prompts for each role.
+Loads Health OS data and builds system prompts for each role.
+Recipes and daily logs come from Supabase (db.py).
+Static files (profile, directives, strategy, program, biomarkers, goals) are read from disk.
 """
 from pathlib import Path
-from datetime import date, timedelta
+from datetime import date
 import yaml
 
+import db
+
 BASE = Path(__file__).parent.parent  # Health OS root
-RECIPES_FILE = BASE / "data/tactical/nutrition/recipes.yaml"
 
 
 def _read(path: Path) -> str:
@@ -26,24 +29,23 @@ def _yaml(path: Path) -> dict:
         return {}
 
 
-def _dump(data: dict) -> str:
+def _dump(data) -> str:
     try:
         return yaml.dump(data, allow_unicode=True, default_flow_style=False)
     except Exception:
         return str(data)
 
 
-def _week_logs() -> str:
+def _week_logs_text() -> str:
     parts = []
-    for i in range(1, 8):
-        d = (date.today() - timedelta(days=i)).isoformat()
-        log = _yaml(BASE / f"data/tactical/logs/{d}.yaml")
-        if log:
-            parts.append(f"### {d}\n```yaml\n{_dump(log)}```")
+    for log in db.get_week_logs():
+        d = log.get("date", "")
+        parts.append(f"### {d}\n```yaml\n{_dump(log)}```")
     return "\n".join(parts) if parts else "Логов за прошлую неделю нет."
 
 
 def build_system_prompt(role: str = "coach") -> str:
+    # ── Static files (change rarely, managed via Claude Code) ──
     profile = _dump(_yaml(BASE / "data/tactical/user_profile.yaml"))
     directives = _dump(_yaml(BASE / "data/strategic/directives.yaml"))
     strategy = _read(BASE / "data/tactical/strategy.md")
@@ -51,9 +53,10 @@ def build_system_prompt(role: str = "coach") -> str:
     biomarkers = _dump(_yaml(BASE / "data/strategic/biomarkers.yaml"))
     goals = _read(BASE / "data/strategic/goals.md")
 
+    # ── Dynamic data from Supabase ──
     today = date.today().isoformat()
-    today_log = _dump(_yaml(BASE / f"data/tactical/logs/{today}.yaml"))
-    recipes = _dump(_yaml(RECIPES_FILE))
+    today_log = _dump(db.get_log(today))
+    recipes = _dump({"recipes": db.get_all_recipes()})
 
     base = f"""# Health OS — Active Session
 Today: {today}
@@ -90,7 +93,7 @@ Today: {today}
     if role == "strategist":
         base += f"""
 ## Week's Logs
-{_week_logs()}
+{_week_logs_text()}
 
 ## Biomarkers
 ```yaml

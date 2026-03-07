@@ -1,6 +1,7 @@
 """
 Oura Ring API integration.
 Fetches sleep, readiness, activity, workouts, stress, SpO2 for Health OS.
+Writes results to Supabase (oura_data + daily_logs tables).
 """
 import asyncio
 import os
@@ -8,6 +9,8 @@ from datetime import date, datetime
 from pathlib import Path
 
 import httpx
+
+import db
 
 BASE = Path(__file__).parent.parent
 TOKEN_FILE = BASE / "config/oura_token.txt"
@@ -207,19 +210,20 @@ async def sync_all(d: str = None) -> dict:
 async def handle_tool(args: dict) -> dict:
     """
     Called from bot.py when Claude invokes the sync_oura tool.
-    Fetches data, optionally writes sleep to today's YAML log.
+    Fetches data, saves to Supabase (oura_data + daily_logs).
     """
-    from tools import _read_log, _write_log  # avoid circular imports
-
     d = args.get("date") or date.today().isoformat()
     data = await sync_all(d)
+
+    # Always save raw Oura data to oura_data table
+    db.upsert_oura(d, data)
 
     if args.get("write_to_log", True):
         sleep = data.get("sleep", {})
         readiness = data.get("readiness", {})
 
         if sleep.get("hours"):
-            log = _read_log(d)
+            log = db.get_log(d)
             log["sleep"] = {
                 "hours": sleep.get("hours"),
                 "quality": _score_to_quality(readiness.get("score")),
@@ -235,7 +239,7 @@ async def handle_tool(args: dict) -> dict:
                     "efficiency": sleep.get("efficiency"),
                 },
             }
-            _write_log(log, d)
+            db.upsert_log(d, log)
             data["log_updated"] = True
 
     return data

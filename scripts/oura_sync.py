@@ -2,9 +2,9 @@
 """
 Oura Daily Sync — Health OS
 ────────────────────────────
-Сохраняет ВСЕ данные из Oura API в два места:
-  • data/oura/{YYYY-MM-DD}.yaml  — полный Oura-лог
-  • data/tactical/logs/{YYYY-MM-DD}.yaml  — обновляет раздел sleep
+Сохраняет данные из Oura API в Supabase:
+  • oura_data  — полный Oura-лог за день
+  • daily_logs — обновляет раздел sleep
 
 Доступные данные:
   sleep     — часы, стадии, HRV, ЧСС, SpO2, латентность, беспокойство, дыхание
@@ -24,7 +24,7 @@ Usage:
   python3 scripts/oura_sync.py --days 90    # последние 90 дней (бэкфилл)
 
 Cron (каждый день в 09:00):
-  0 9 * * * "/Users/natka/Desktop/Cursor/Health OS/bot/venv/bin/python3" "/Users/natka/Desktop/Cursor/Health OS/scripts/oura_sync.py" >> "/Users/natka/Desktop/Cursor/Health OS/data/oura/sync.log" 2>&1
+  0 9 * * * /path/to/venv/bin/python3 /path/to/Health\ OS/scripts/oura_sync.py >> /tmp/oura_sync.log 2>&1
 """
 
 import json
@@ -35,10 +35,14 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 from urllib.request import urlopen, Request
 from urllib.error import URLError, HTTPError
+from dotenv import load_dotenv
 
 BASE = Path(__file__).parent.parent
-OURA_DIR = BASE / "data/oura"
-LOGS_DIR = BASE / "data/tactical/logs"
+load_dotenv(BASE / ".env")
+
+sys.path.insert(0, str(BASE / "bot"))
+import db
+
 TOKEN_FILE = BASE / "config/oura_token.txt"
 API_BASE = "https://api.ouraring.com/v2/usercollection"
 
@@ -295,33 +299,21 @@ def build_day(d: str, token: str, batch: dict = None) -> dict:
     return result
 
 
-# ─── Write files ──────────────────────────────────────────────────────────────
+# ─── Write to Supabase ────────────────────────────────────────────────────────
 
-def save_oura_log(data: dict) -> Path:
-    OURA_DIR.mkdir(parents=True, exist_ok=True)
-    path = OURA_DIR / f"{data['date']}.yaml"
-    with open(path, "w", encoding="utf-8") as f:
-        yaml.dump(_remove_none(data), f, allow_unicode=True,
-                  default_flow_style=False, sort_keys=False)
-    return path
+def save_to_supabase(data: dict):
+    """Save raw Oura data to oura_data table."""
+    db.upsert_oura(data["date"], _remove_none(data))
 
 
-def update_tactical_log(data: dict):
+def update_daily_log(data: dict):
+    """Update sleep section in daily_logs table."""
     d = data["date"]
     sleep = data.get("sleep", {})
     if not sleep.get("hours"):
-        return None
+        return
 
-    path = LOGS_DIR / f"{d}.yaml"
-    LOGS_DIR.mkdir(parents=True, exist_ok=True)
-
-    if path.exists():
-        with open(path, encoding="utf-8") as f:
-            log = yaml.safe_load(f) or {}
-    else:
-        log = {"date": d, "weight_morning": None, "meals": [],
-               "training": [], "sleep": None, "notes": ""}
-
+    log = db.get_log(d)
     readiness = data.get("readiness", {})
     bio = sleep.get("biometrics", {}) or {}
     log["sleep"] = _remove_none({
@@ -342,10 +334,7 @@ def update_tactical_log(data: dict):
             "breath_avg":      sleep.get("breath_avg"),
         },
     })
-
-    with open(path, "w", encoding="utf-8") as f:
-        yaml.dump(log, f, allow_unicode=True, default_flow_style=False, sort_keys=False)
-    return path
+    db.upsert_log(d, log)
 
 
 # ─── Warnings ─────────────────────────────────────────────────────────────────
@@ -380,8 +369,8 @@ def sync_one(d: str, token: str, batch: dict = None, verbose: bool = True) -> bo
     if verbose:
         print(f"  [{d}] ", end="", flush=True)
     data = build_day(d, token, batch)
-    save_oura_log(data)
-    update_tactical_log(data)
+    save_to_supabase(data)
+    update_daily_log(data)
     has_sleep = bool(data.get("sleep", {}).get("hours"))
     if verbose:
         sleep_h  = data.get("sleep", {}).get("hours", "—")
