@@ -58,8 +58,12 @@ TOOLS = [
         "Записать приём пищи в сегодняшний лог. Вызывай когда пользователь описывает что съел/выпил.",
         {
             "description": {"type": "string", "description": "Описание блюда/напитка"},
-            "calories": {"type": "integer", "description": "Примерные калории (ккал)"},
+            "calories": {"type": "integer", "description": "Калории (ккал)"},
             "protein": {"type": "number", "description": "Белок в граммах"},
+            "fat": {"type": "number", "description": "Жиры в граммах"},
+            "carbs": {"type": "number", "description": "Углеводы в граммах"},
+            "fiber": {"type": "number", "description": "Клетчатка в граммах"},
+            "glycemic_index": {"type": "integer", "description": "Гликемический индекс (0-100), null для мяса/рыбы/яиц"},
             "time": {"type": "string", "description": "Время приёма пищи HH:MM. Если не указано — текущее."},
         },
         ["description", "calories", "protein"],
@@ -210,6 +214,8 @@ TOOLS = [
             "protein": {"type": "number", "description": "Новый белок (г)"},
             "fat": {"type": "number", "description": "Новые жиры (г)"},
             "carbs": {"type": "number", "description": "Новые углеводы (г)"},
+            "fiber": {"type": "number", "description": "Клетчатка (г)"},
+            "glycemic_index": {"type": "integer", "description": "Гликемический индекс (0-100)"},
         },
         [],
     ),
@@ -251,6 +257,9 @@ def handle_tool(name: str, args: dict) -> dict:
             "calories": args["calories"],
             "protein": args["protein"],
         }
+        for field in ("fat", "carbs", "fiber", "glycemic_index"):
+            if field in args and args[field] is not None:
+                meal[field] = args[field]
         log["meals"].append(meal)
         db.upsert_log(log["date"], log)
 
@@ -309,8 +318,11 @@ def handle_tool(name: str, args: dict) -> dict:
         log = db.get_log()
         targets = _get_targets()
         meals = log.get("meals", [])
-        total_cal = sum(m.get("calories", 0) for m in meals)
-        total_prot = sum(m.get("protein", 0) for m in meals)
+        total_cal = sum(m.get("calories", 0) or 0 for m in meals)
+        total_prot = sum(m.get("protein", 0) or 0 for m in meals)
+        total_fat = sum(m.get("fat", 0) or 0 for m in meals)
+        total_carbs = sum(m.get("carbs", 0) or 0 for m in meals)
+        total_fiber = sum(m.get("fiber", 0) or 0 for m in meals)
         return {
             "date": date.today().isoformat(),
             "weight_morning": log.get("weight_morning"),
@@ -324,6 +336,9 @@ def handle_tool(name: str, args: dict) -> dict:
                 "target": targets["protein"],
                 "remaining": round(targets["protein"] - total_prot, 1),
             },
+            "fat": {"consumed": round(total_fat, 1)},
+            "carbs": {"consumed": round(total_carbs, 1)},
+            "fiber": {"consumed": round(total_fiber, 1)},
             "meals": meals,
             "training": log.get("training", []),
             "sleep": log.get("sleep"),
@@ -404,7 +419,7 @@ def handle_tool(name: str, args: dict) -> dict:
             return {"updated": False, "reason": f"Приём пищи с индексом {idx} не найден (всего {len(meals)})"}
 
         old = dict(meal)
-        for field in ("description", "calories", "protein", "fat", "carbs"):
+        for field in ("description", "calories", "protein", "fat", "carbs", "fiber", "glycemic_index"):
             if field in args and args[field] is not None:
                 meal[field] = args[field]
 
@@ -474,3 +489,84 @@ def handle_tool(name: str, args: dict) -> dict:
         return {"saved": True, "name": args["name"], "total_recipes": total}
 
     return {"error": f"Unknown tool: {name}"}
+
+
+# ─────────────── Photo analysis helpers (used by bot.py) ────────────────
+
+
+def resolve_food_items(items: list) -> list:
+    """
+    For each food item from Claude photo analysis:
+    - If found in recipe DB → scale nutrients proportionally to estimated grams
+    - Otherwise → keep Claude's estimates
+    Returns enriched list ready for confirmation card / logging.
+    """
+    resolved = []
+    for item in items:
+        estimated_g = item.get("estimated_g") or 100
+        recipe = db.lookup_recipe(item.get("name", ""))
+
+        if recipe and recipe.get("serving_g") and recipe.get("calories"):
+            ratio = estimated_g / recipe["serving_g"]
+            entry = {
+                "name": recipe["name"],
+                "estimated_g": estimated_g,
+                "calories": round((recipe.get("calories") or 0) * ratio),
+                "protein": round(((recipe.get("protein") or 0) * ratio), 1),
+                "fat": round(((recipe.get("fat") or 0) * ratio), 1),
+                "carbs": round(((recipe.get("carbs") or 0) * ratio), 1),
+                "fiber": round(((recipe.get("fiber") or 0) * ratio), 1) if recipe.get("fiber") else None,
+                "glycemic_index": recipe.get("glycemic_index"),
+                "portion_note": item.get("portion_note", ""),
+                "source": "recipe",
+            }
+        else:
+            entry = {
+                "name": item.get("name", "?"),
+                "estimated_g": estimated_g,
+                "calories": item.get("calories") or 0,
+                "protein": item.get("protein") or 0,
+                "fat": item.get("fat") or 0,
+                "carbs": item.get("carbs") or 0,
+                "fiber": item.get("fiber"),
+                "glycemic_index": item.get("glycemic_index"),
+                "portion_note": item.get("portion_note", ""),
+                "source": "estimated",
+            }
+        resolved.append(entry)
+    return resolved
+
+
+def log_food_items_bulk(items: list) -> dict:
+    """Log multiple food items at once (called after photo confirmation)."""
+    log = db.get_log()
+    if "meals" not in log:
+        log["meals"] = []
+
+    now_time = datetime.now().strftime("%H:%M")
+    for item in items:
+        meal = {
+            "time": now_time,
+            "description": item.get("name", ""),
+            "calories": item.get("calories") or 0,
+            "protein": item.get("protein") or 0,
+        }
+        for field in ("fat", "carbs", "fiber", "glycemic_index"):
+            if item.get(field) is not None:
+                meal[field] = item[field]
+        log["meals"].append(meal)
+
+    db.upsert_log(log["date"], log)
+
+    targets = _get_targets()
+    all_meals = log["meals"]
+    total_cal = sum(m.get("calories", 0) or 0 for m in all_meals)
+    total_prot = sum(m.get("protein", 0) or 0 for m in all_meals)
+    return {
+        "logged_count": len(items),
+        "day_total": {"calories": total_cal, "protein": round(total_prot, 1)},
+        "remaining": {
+            "calories": targets["calories"] - total_cal,
+            "protein": round(targets["protein"] - total_prot, 1),
+        },
+    }

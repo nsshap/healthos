@@ -24,6 +24,7 @@ from collections import defaultdict
 from datetime import time as dt_time
 from zoneinfo import ZoneInfo
 
+from anthropic import AsyncAnthropic
 from dotenv import load_dotenv
 from openai import AsyncOpenAI, RateLimitError
 from telegram import Update
@@ -39,7 +40,7 @@ import json
 load_dotenv()
 
 from context import build_system_prompt
-from tools import TOOLS, handle_tool
+from tools import TOOLS, handle_tool, resolve_food_items, log_food_items_bulk
 import oura as oura_module
 
 # ─────────────────────────── Config ───────────────────────────
@@ -61,11 +62,20 @@ logging.basicConfig(
 log = logging.getLogger(__name__)
 
 client = AsyncOpenAI(api_key=OPENAI_KEY)
+_anthropic = AsyncAnthropic(api_key=os.getenv("ANTHROPIC_API_KEY", ""))
 
 # Per-user conversation history (in-memory, resets on restart)
 _history: dict[int, list] = defaultdict(list)
 # Per-user active role
 _role: dict[int, str] = defaultdict(lambda: "coach")
+# Per-user pending food items waiting for confirmation after photo
+_pending_food: dict[int, list] = {}
+
+# Words that confirm pending food log
+_CONFIRM_WORDS = frozenset({
+    "да", "ок", "ok", "oke", "верно", "всё верно", "всё так", "хорошо",
+    "залогируй", "логируй", "+", "✅", "👍", "yes", "yep",
+})
 
 MAX_HISTORY = 30  # messages kept per user
 
@@ -326,6 +336,108 @@ async def cmd_clear(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("История диалога очищена.")
 
 
+async def _analyze_food_with_claude(b64: str, caption: str) -> list:
+    """
+    Use Claude claude-sonnet-4-6 to analyze a food photo.
+    Returns a list of food items with estimated grams and nutrition per portion.
+    """
+    extra = f"\nUser note: {caption}" if caption else ""
+    prompt = (
+        "Analyze this food photo. Return ONLY a valid JSON array — no markdown, no explanation.\n\n"
+        "For each visible food item return an object:\n"
+        '{"name": "название на русском (кратко, например овсянка / куриная грудка)", '
+        '"estimated_g": 150, '
+        '"portion_note": "краткое описание порции", '
+        '"confidence": "high", '
+        '"calories": 180, '
+        '"protein": 6.0, '
+        '"fat": 3.5, '
+        '"carbs": 32.0, '
+        '"fiber": 4.0, '
+        '"glycemic_index": 55}\n\n'
+        "Rules:\n"
+        "- One entry per distinct food item; mixed dish (soup, stew, salad) = one entry\n"
+        "- Scale ALL nutrition values to the estimated portion on the plate (not per 100g)\n"
+        "- glycemic_index: null for meat/fish/eggs/cheese/pure fat\n"
+        "- fiber: null if genuinely unknown\n"
+        "- Be conservative with gram estimates; use plate/hand/utensil as visual reference"
+        + extra
+    )
+
+    response = await _anthropic.messages.create(
+        model="claude-sonnet-4-6",
+        max_tokens=1024,
+        messages=[{
+            "role": "user",
+            "content": [
+                {
+                    "type": "image",
+                    "source": {"type": "base64", "media_type": "image/jpeg", "data": b64},
+                },
+                {"type": "text", "text": prompt},
+            ],
+        }],
+    )
+
+    text = response.content[0].text.strip()
+    # Strip markdown code fences if Claude wrapped the JSON
+    if "```" in text:
+        for block in text.split("```")[1::2]:
+            cleaned = block.strip().lstrip("json").strip()
+            try:
+                return json.loads(cleaned)
+            except json.JSONDecodeError:
+                continue
+    return json.loads(text)
+
+
+def _build_confirmation_card(items: list) -> str:
+    lines = ["*Распознано на фото:*\n"]
+    total_cal = total_prot = total_fat = total_carbs = total_fiber = 0.0
+
+    for i, item in enumerate(items, 1):
+        name = item.get("name", "?")
+        g = item.get("estimated_g", 0)
+        cal = item.get("calories") or 0
+        prot = item.get("protein") or 0
+        fat = item.get("fat") or 0
+        carbs = item.get("carbs") or 0
+        fiber = item.get("fiber")
+        gi = item.get("glycemic_index")
+        src = item.get("source", "estimated")
+        note = item.get("portion_note", "")
+
+        mark = "📚" if src == "recipe" else "~"
+        line = f"{i}. *{name}* {mark} — {g}г\n"
+        line += f"   {cal} ккал | Б:{prot}г Ж:{fat}г У:{carbs}г"
+        if fiber:
+            line += f" Кл:{round(fiber, 1)}г"
+        if gi:
+            line += f" | ГИ:{gi}"
+        if note:
+            line += f"\n   _{note}_"
+
+        lines.append(line)
+        total_cal += cal
+        total_prot += prot
+        total_fat += fat
+        total_carbs += carbs
+        if fiber:
+            total_fiber += fiber
+
+    lines.append("")
+    total_line = (
+        f"*Итого:* {round(total_cal)} ккал | "
+        f"Б:{round(total_prot, 1)}г Ж:{round(total_fat, 1)}г У:{round(total_carbs, 1)}г"
+    )
+    if total_fiber:
+        total_line += f" Кл:{round(total_fiber, 1)}г"
+    lines.append(total_line)
+    lines.append("_📚 = из базы рецептов  ~ = оценка_")
+    lines.append("\nНапиши *да* — залогирую. Или поправь что не так.")
+    return "\n".join(lines)
+
+
 async def cmd_recipes(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     """Show all saved recipes grouped by category."""
     if not _allowed(update):
@@ -390,47 +502,68 @@ async def handle_photo(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     uid = update.effective_user.id
     role = _role[uid]
+    caption = update.message.caption or ""
 
     await update.effective_chat.send_action("typing")
 
-    # Download the highest-resolution version of the photo
+    # Download highest-resolution Telegram photo
     photo = update.message.photo[-1]
     tg_file = await ctx.bot.get_file(photo.file_id)
     photo_bytes = await tg_file.download_as_bytearray()
     b64 = base64.standard_b64encode(bytes(photo_bytes)).decode()
 
-    # Caption text the user may have added to the photo
-    caption = update.message.caption or ""
-
+    # Lab results → existing GPT-4o flow
     if role == "analyst":
         prompt = (
             "Это результаты анализов. Распознай все показатели, "
-            "сравни с оптимальными значениями по Attia и дай оценку. "
-            + (f"Комментарий пользователя: {caption}" if caption else "")
+            "сравни с оптимальными значениями по Attia и дай оценку."
+            + (f" Комментарий: {caption}" if caption else "")
         )
-    else:
-        prompt = (
-            "На фото еда. Определи продукты, оцени граммовки и КБЖУ. "
-            "Залогируй каждый компонент через log_food и покажи остаток бюджета. "
-            + (f"Комментарий пользователя: {caption}" if caption else "")
-        )
+        content = [
+            {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}},
+            {"type": "text", "text": prompt},
+        ]
+        try:
+            reply = await _claude(uid, content, role)
+        except Exception as e:
+            log.exception("Photo (analyst) error: %s", e)
+            reply = f"Не удалось обработать фото: {e}"
+        await _send(update, reply)
+        return
 
-    # Build multimodal content: image + text (OpenAI format)
-    content = [
-        {
-            "type": "image_url",
-            "image_url": {"url": f"data:image/jpeg;base64,{b64}"},
-        },
-        {"type": "text", "text": prompt},
-    ]
-
+    # Food photo → Claude analyzes, then confirmation card
     try:
-        reply = await _claude(uid, content, role)
+        raw_items = await _analyze_food_with_claude(b64, caption)
     except Exception as e:
-        log.exception("Claude photo error: %s", e)
-        reply = f"Не удалось обработать фото: {e}"
+        log.exception("Claude food analysis failed: %s", e)
+        # Fallback: send to GPT-4o directly
+        content = [
+            {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}},
+            {"type": "text", "text": (
+                "На фото еда. Определи все продукты, оцени граммовки. "
+                "Для каждого компонента: сначала lookup_recipe, потом log_food "
+                "с полным КБЖУ (calories, protein, fat, carbs, fiber, glycemic_index). "
+                + (f"Подпись: {caption}" if caption else "")
+            )},
+        ]
+        try:
+            reply = await _claude(uid, content, role)
+        except Exception as e2:
+            reply = f"Не удалось обработать фото: {e2}"
+        await _send(update, reply)
+        return
 
-    await _send(update, reply)
+    # Resolve items: scale from recipe DB or keep Claude estimates
+    items = resolve_food_items(raw_items)
+
+    if not items:
+        await _send(update, "Не удалось распознать еду на фото. Опиши словами что съела.")
+        return
+
+    # Store pending and show confirmation card
+    _pending_food[uid] = items
+    card = _build_confirmation_card(items)
+    await _send(update, card)
 
 
 async def handle_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -441,6 +574,45 @@ async def handle_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     text = update.message.text or ""
     role = _role[uid]
 
+    # ── Pending food confirmation after photo ──────────────────
+    if uid in _pending_food and _pending_food[uid]:
+        pending = _pending_food.pop(uid)
+        text_norm = text.strip().lower()
+
+        if text_norm in {"нет", "отмена", "cancel", "не надо"}:
+            await _send(update, "Отменено, ничего не залогировано.")
+            return
+
+        if text_norm in _CONFIRM_WORDS:
+            # Direct log, no GPT-4o needed
+            result = log_food_items_bulk(pending)
+            lines = [
+                f"✅ Залогировано {result['logged_count']} позиций",
+                f"День: *{result['day_total']['calories']}* ккал, {result['day_total']['protein']}г белка",
+                f"Осталось: *{result['remaining']['calories']}* ккал, {result['remaining']['protein']}г белка",
+            ]
+            await _send(update, "\n".join(lines))
+            return
+
+        # User is adjusting something → pass to GPT-4o with context
+        pending_json = json.dumps(pending, ensure_ascii=False)
+        context_text = (
+            f"Пользователь прислал фото еды. Предложенные записи питания (JSON):\n{pending_json}\n\n"
+            f"Пользователь корректирует: «{text}»\n\n"
+            "Пересчитай позиции согласно корректировке (другие граммы, замена блюда и т.п.). "
+            "Залогируй итоговые данные через log_food с полным КБЖУ "
+            "(calories, protein, fat, carbs, fiber, glycemic_index)."
+        )
+        await update.effective_chat.send_action("typing")
+        try:
+            reply = await _claude(uid, context_text, role)
+        except Exception as e:
+            log.exception("Claude correction error: %s", e)
+            reply = f"Ошибка: {e}"
+        await _send(update, reply)
+        return
+
+    # ── Normal message ─────────────────────────────────────────
     await update.effective_chat.send_action("typing")
 
     try:
