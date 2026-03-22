@@ -24,7 +24,6 @@ from collections import defaultdict
 from datetime import time as dt_time
 from zoneinfo import ZoneInfo
 
-from anthropic import AsyncAnthropic
 from dotenv import load_dotenv
 from openai import AsyncOpenAI, RateLimitError
 from telegram import Update
@@ -62,7 +61,6 @@ logging.basicConfig(
 log = logging.getLogger(__name__)
 
 client = AsyncOpenAI(api_key=OPENAI_KEY)
-_anthropic = AsyncAnthropic(api_key=os.getenv("ANTHROPIC_API_KEY", ""))
 
 # Per-user conversation history (in-memory, resets on restart)
 _history: dict[int, list] = defaultdict(list)
@@ -364,9 +362,9 @@ def _parse_json_array(text: str) -> list:
     raise ValueError(f"Не удалось распарсить JSON: {text[:300]}")
 
 
-async def _analyze_food_with_claude(b64: str, caption: str) -> list:
+async def _analyze_food_with_gpt(b64: str, caption: str) -> list:
     """
-    Use Claude claude-sonnet-4-6 to analyze a food photo.
+    Use GPT-4o to analyze a food photo.
     Returns a list of food items with estimated grams and full nutrition.
     """
     extra = f"\nUser note: {caption}" if caption else ""
@@ -401,22 +399,19 @@ async def _analyze_food_with_claude(b64: str, caption: str) -> list:
         + extra
     )
 
-    response = await _anthropic.messages.create(
-        model="claude-sonnet-4-6",
+    response = await client.chat.completions.create(
+        model="gpt-4o",
         max_tokens=1024,
         messages=[{
             "role": "user",
             "content": [
-                {
-                    "type": "image",
-                    "source": {"type": "base64", "media_type": "image/jpeg", "data": b64},
-                },
+                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}},
                 {"type": "text", "text": prompt},
             ],
         }],
     )
 
-    return _parse_json_array(response.content[0].text)
+    return _parse_json_array(response.choices[0].message.content or "[]")
 
 
 async def _apply_food_corrections(pending: list, correction: str) -> list:
@@ -435,13 +430,13 @@ async def _apply_food_corrections(pending: list, correction: str) -> list:
         "Return ONLY the updated JSON array. No markdown, no explanation."
     )
 
-    response = await _anthropic.messages.create(
-        model="claude-sonnet-4-6",
+    response = await client.chat.completions.create(
+        model="gpt-4o",
         max_tokens=1024,
         messages=[{"role": "user", "content": prompt}],
     )
 
-    return _parse_json_array(response.content[0].text)
+    return _parse_json_array(response.choices[0].message.content or "[]")
 
 
 def _build_confirmation_card(items: list) -> str:
@@ -589,26 +584,12 @@ async def handle_photo(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await _send(update, reply)
         return
 
-    # Food photo → Claude analyzes, then confirmation card
+    # Food photo → GPT-4o analyzes, then confirmation card
     try:
-        raw_items = await _analyze_food_with_claude(b64, caption)
+        raw_items = await _analyze_food_with_gpt(b64, caption)
     except Exception as e:
-        log.exception("Claude food analysis failed: %s", e)
-        # Fallback: send to GPT-4o directly
-        content = [
-            {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}},
-            {"type": "text", "text": (
-                "На фото еда. Определи все продукты, оцени граммовки. "
-                "Для каждого компонента: сначала lookup_recipe, потом log_food "
-                "с полным КБЖУ (calories, protein, fat, carbs, fiber, glycemic_index). "
-                + (f"Подпись: {caption}" if caption else "")
-            )},
-        ]
-        try:
-            reply = await _claude(uid, content, role)
-        except Exception as e2:
-            reply = f"Не удалось обработать фото: {e2}"
-        await _send(update, reply)
+        log.exception("GPT-4o food analysis failed: %s", e)
+        await _send(update, f"⚠️ Не удалось распознать еду на фото ({e}). Залогируй вручную — напиши что съела и я запишу.")
         return
 
     # Resolve items: scale from recipe DB or keep Claude estimates
