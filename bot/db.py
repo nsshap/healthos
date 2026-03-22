@@ -3,11 +3,17 @@ Supabase client and database operations for Health OS.
 Single source of truth for recipes, daily logs, and Oura data.
 """
 import os
+import time
 from datetime import date, timedelta
 
 from supabase import create_client, Client
 
 _client: Client | None = None
+
+# ─────────────────────── Recipe cache ─────────────────────────
+_recipe_cache: list[dict] = []
+_recipe_cache_ts: float = 0.0
+_RECIPE_CACHE_TTL = 300  # 5 minutes
 
 
 def get_client() -> Client:
@@ -25,29 +31,69 @@ def get_client() -> Client:
 
 
 def get_all_recipes() -> list[dict]:
+    global _recipe_cache, _recipe_cache_ts
+    if time.time() - _recipe_cache_ts < _RECIPE_CACHE_TTL:
+        return _recipe_cache
     r = get_client().table("recipes").select("*").order("name").execute()
-    return r.data or []
+    _recipe_cache = r.data or []
+    _recipe_cache_ts = time.time()
+    return _recipe_cache
+
+
+def invalidate_recipe_cache() -> None:
+    global _recipe_cache_ts
+    _recipe_cache_ts = 0.0
 
 
 def lookup_recipe(query: str) -> dict | None:
-    """Find recipe by name or alias (substring match)."""
+    """
+    Find recipe by name or alias.
+    Scores each candidate and returns the best match above threshold.
+    - Exact match → score 1.0
+    - query is substring of candidate → score = len(query)/len(candidate)
+    - candidate is substring of query AND len(candidate) >= 4
+      AND ratio >= 0.4 → score = len(candidate)/len(query)
+    Minimum score to accept: 0.5
+    """
     query_lower = query.lower().strip()
+    if not query_lower:
+        return None
+
+    best_recipe = None
+    best_score = 0.0
+
     for r in get_all_recipes():
         candidates = [r.get("name", "").lower()] + [
             a.lower() for a in (r.get("aliases") or [])
         ]
-        if any(query_lower in c or c in query_lower for c in candidates):
-            return r
-    return None
+        for c in candidates:
+            if not c:
+                continue
+            if query_lower == c:
+                score = 1.0
+            elif query_lower in c:
+                score = len(query_lower) / len(c)
+            elif c in query_lower and len(c) >= 4 and len(c) / len(query_lower) >= 0.4:
+                score = len(c) / len(query_lower)
+            else:
+                continue
+
+            if score > best_score:
+                best_score = score
+                best_recipe = r
+
+    return best_recipe if best_score >= 0.5 else None
 
 
 def insert_recipe(data: dict) -> dict:
     r = get_client().table("recipes").insert(data).execute()
+    invalidate_recipe_cache()
     return r.data[0] if r.data else {}
 
 
 def update_recipe_by_id(recipe_id: int, changes: dict) -> dict:
     r = get_client().table("recipes").update(changes).eq("id", recipe_id).execute()
+    invalidate_recipe_cache()
     return r.data[0] if r.data else {}
 
 

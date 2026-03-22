@@ -341,11 +341,12 @@ async def _analyze_food_with_claude(b64: str, caption: str) -> list:
     Use Claude claude-sonnet-4-6 to analyze a food photo.
     Returns a list of food items with estimated grams and nutrition per portion.
     """
+    import re as _re
     extra = f"\nUser note: {caption}" if caption else ""
     prompt = (
         "Analyze this food photo. Return ONLY a valid JSON array — no markdown, no explanation.\n\n"
         "For each visible food item return an object:\n"
-        '{"name": "название на русском (кратко, например овсянка / куриная грудка)", '
+        '{"name": "название на русском — КРАТКО, одно слово или два: овсянка / куриная грудка / гречка / творог / банан", '
         '"estimated_g": 150, '
         '"portion_note": "краткое описание порции", '
         '"confidence": "high", '
@@ -357,6 +358,9 @@ async def _analyze_food_with_claude(b64: str, caption: str) -> list:
         '"glycemic_index": 55}\n\n'
         "Rules:\n"
         "- One entry per distinct food item; mixed dish (soup, stew, salad) = one entry\n"
+        "- name: use the BASE ingredient only, NOT a full description. "
+        "  Good: 'овсянка', 'куриная грудка', 'греческий йогурт'. "
+        "  Bad: 'овсяная каша с фруктами', 'жареная куриная грудка на гриле'.\n"
         "- Scale ALL nutrition values to the estimated portion on the plate (not per 100g)\n"
         "- glycemic_index: null for meat/fish/eggs/cheese/pure fat\n"
         "- fiber: null if genuinely unknown\n"
@@ -380,7 +384,8 @@ async def _analyze_food_with_claude(b64: str, caption: str) -> list:
     )
 
     text = response.content[0].text.strip()
-    # Strip markdown code fences if Claude wrapped the JSON
+
+    # 1. Try to extract from markdown code fences
     if "```" in text:
         for block in text.split("```")[1::2]:
             cleaned = block.strip().lstrip("json").strip()
@@ -388,7 +393,22 @@ async def _analyze_food_with_claude(b64: str, caption: str) -> list:
                 return json.loads(cleaned)
             except json.JSONDecodeError:
                 continue
-    return json.loads(text)
+
+    # 2. Try the raw text as-is
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        pass
+
+    # 3. Regex: find first [...] block in the response
+    match = _re.search(r'\[[\s\S]*?\]', text)
+    if match:
+        try:
+            return json.loads(match.group())
+        except json.JSONDecodeError:
+            pass
+
+    raise ValueError(f"Не удалось распарсить JSON из ответа Claude: {text[:300]}")
 
 
 def _build_confirmation_card(items: list) -> str:
@@ -412,7 +432,7 @@ def _build_confirmation_card(items: list) -> str:
         line += f"   {cal} ккал | Б:{prot}г Ж:{fat}г У:{carbs}г"
         if fiber:
             line += f" Кл:{round(fiber, 1)}г"
-        if gi:
+        if gi is not None:
             line += f" | ГИ:{gi}"
         if note:
             line += f"\n   _{note}_"
@@ -439,42 +459,35 @@ def _build_confirmation_card(items: list) -> str:
 
 
 async def cmd_recipes(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    """Show all saved recipes grouped by category."""
+    """Show all saved recipes from Supabase."""
     if not _allowed(update):
         return
-    import yaml
-    from pathlib import Path
-    recipes_path = Path(__file__).parent.parent / "data/tactical/nutrition/recipes.yaml"
-    if not recipes_path.exists():
-        await update.message.reply_text("Рецептов пока нет.")
-        return
-    with open(recipes_path, encoding="utf-8") as f:
-        data = yaml.safe_load(f) or {}
-    recipes = data.get("recipes", [])
+    from collections import defaultdict
+    import db as db_module
+
+    recipes = db_module.get_all_recipes()
     if not recipes:
         await update.message.reply_text("Рецептов пока нет.")
         return
 
-    # Group by category
-    from collections import defaultdict
-    by_cat = defaultdict(list)
+    by_cat: dict = defaultdict(list)
     for r in recipes:
         cat = r.get("category") or "Другое"
         by_cat[cat].append(r)
 
     lines = [f"*Рецепты* — {len(recipes)} шт.\n"]
-    for cat, items in by_cat.items():
+    for cat, items in sorted(by_cat.items()):
         lines.append(f"*{cat}*")
         for r in items:
             est = " _(~)_" if r.get("estimated") else ""
-            gi = f", ГИ {r['glycemic_index']}" if r.get("glycemic_index") else ""
+            gi = f", ГИ {r['glycemic_index']}" if r.get("glycemic_index") is not None else ""
             lines.append(
-                f"• {r['name']}{est} — {r['calories']} ккал, "
-                f"{r['protein']}г белка{gi} / {r['serving_g']}г"
+                f"• {r['name']}{est} — {r.get('calories', '?')} ккал, "
+                f"{r.get('protein', '?')}г белка{gi} / {r.get('serving_g', '?')}г"
             )
         lines.append("")
 
-    lines.append("_(~) = оценочные данные, уточняются при логировании_")
+    lines.append("_(~) = оценочные данные_")
     await _send(update, "\n".join(lines))
 
 
