@@ -648,12 +648,8 @@ async def handle_voice(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await _send(update, "⚠️ Не удалось распознать голосовое сообщение.")
         return
 
-    # Echo transcription so user sees what was recognised
     await _send(update, f"🎤 _{text}_")
-
-    # Inject transcribed text into update and reuse handle_message logic
-    update.message.text = text
-    await handle_message(update, ctx)
+    await _process_message(update, ctx, text)
 
 
 async def handle_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -662,6 +658,12 @@ async def handle_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     uid = update.effective_user.id
     text = update.message.text or ""
+    role = _role[uid]
+    await _process_message(update, ctx, text)
+
+
+async def _process_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE, text: str):
+    uid = update.effective_user.id
     role = _role[uid]
 
     # ── Pending food confirmation after photo ──────────────────
