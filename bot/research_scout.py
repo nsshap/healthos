@@ -2,12 +2,12 @@
 Research Scout — ежедневный мониторинг научных источников.
 
 Каждый день:
-  - Парсит 9 RSS/Atom фидов (подкасты, журналы, блоги)
-  - Скорит релевантность 0-10 через Claude
-  - Сохраняет в локальный JSON-кэш
+  - Парсит 8 RSS/Atom фидов (подкасты, журналы, блоги)
+  - Скорит релевантность 0-10 через gpt-4o-mini
+  - Сохраняет в Supabase (таблица research_items)
 
 По воскресеньям:
-  - Генерирует дайджест топ-находок недели
+  - Генерирует дайджест топ-находок недели через gpt-4o
   - Отправляет в Telegram
 """
 
@@ -16,11 +16,13 @@ import hashlib
 import json
 import logging
 from datetime import date, datetime, timedelta
-from pathlib import Path
+
 
 import feedparser
 import httpx
 from openai import AsyncOpenAI
+
+import db  # Supabase storage
 
 log = logging.getLogger(__name__)
 
@@ -71,12 +73,10 @@ FEEDS = [
 
 # ─────────────────── Конфиг ─────────────────────
 
-CACHE_FILE = Path(__file__).parent / "research_items.json"
 MAX_ITEMS_PER_FEED = 10      # сколько свежих статей брать с каждого фида
 DIGEST_MIN_SCORE = 6         # минимальный score для попадания в дайджест
 DIGEST_TOP_N = 7             # сколько статей показывать в дайджесте
-RETENTION_DAYS = 30          # сколько дней хранить статьи в кэше
-SCORE_BATCH_SIZE = 12        # статей за один вызов Claude при скоринге
+SCORE_BATCH_SIZE = 12        # статей за один вызов gpt-4o-mini при скоринге
 
 # Профиль для скоринга релевантности — можно адаптировать
 HEALTH_PROFILE = """
@@ -104,33 +104,8 @@ HEALTH_PROFILE = """
 """
 
 
-# ────────────────── Кэш ─────────────────────────
-
-def _load_cache() -> list[dict]:
-    if not CACHE_FILE.exists():
-        return []
-    try:
-        return json.loads(CACHE_FILE.read_text(encoding="utf-8"))
-    except Exception as e:
-        log.warning("Не удалось загрузить кэш: %s", e)
-        return []
-
-
-def _save_cache(items: list[dict]) -> None:
-    CACHE_FILE.write_text(
-        json.dumps(items, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
-
-
 def _item_id(url: str) -> str:
     return hashlib.md5(url.encode()).hexdigest()[:12]
-
-
-def _prune_cache(items: list[dict]) -> list[dict]:
-    """Удалить статьи старше RETENTION_DAYS дней."""
-    cutoff = (datetime.utcnow() - timedelta(days=RETENTION_DAYS)).isoformat()
-    return [i for i in items if i.get("fetched_at", "") >= cutoff]
 
 
 # ────────────────── Фетчинг фидов ───────────────
@@ -229,51 +204,43 @@ async def _score_articles(client: AsyncOpenAI, items: list[dict]) -> list[dict]:
 
 # ────────────────── Основной scout ──────────────
 
-async def run_daily_scout(anthropic_client: AsyncOpenAI) -> int:
+async def run_daily_scout(openai_client: AsyncOpenAI) -> int:
     """
     Ежедневный скаутинг:
     1. Загрузить новые статьи из всех фидов
-    2. Убрать дубли (уже есть в кэше)
+    2. Убрать дубли (по id из Supabase)
     3. Оценить релевантность
-    4. Добавить в кэш
+    4. Сохранить в Supabase
     Возвращает количество новых статей.
     """
-    cache = _load_cache()
-    existing_ids = {item["id"] for item in cache}
+    existing_ids = db.get_research_ids()
 
     raw = await _fetch_all_feeds()
     new_items = [item for item in raw if item["id"] not in existing_ids]
     log.info("Новых статей (после дедупликации): %d", len(new_items))
 
     if new_items:
-        new_items = await _score_articles(anthropic_client, new_items)
-        cache.extend(new_items)
+        new_items = await _score_articles(openai_client, new_items)
+        db.insert_research_items(new_items)
 
-    cache = _prune_cache(cache)
-    _save_cache(cache)
     return len(new_items)
 
 
 # ────────────────── Воскресный дайджест ─────────
 
-async def generate_weekly_digest(anthropic_client: AsyncOpenAI) -> str:
+async def generate_weekly_digest(openai_client: AsyncOpenAI) -> str:
     """
     Генерирует дайджест топ-находок за прошедшую неделю.
     Возвращает отформатированный текст для Telegram.
     """
-    cache = _load_cache()
     week_ago = (datetime.utcnow() - timedelta(days=7)).isoformat()
-    week_items = [
-        item for item in cache
-        if item.get("fetched_at", "") >= week_ago
-        and (item.get("score") or 0) >= DIGEST_MIN_SCORE
-    ]
+    week_items = db.get_research_items_since(week_ago, min_score=DIGEST_MIN_SCORE)
 
     if not week_items:
         return "📭 *Research Digest*\n\nЗа эту неделю релевантных находок не было."
 
-    # Сортируем по score, берём топ N
-    top = sorted(week_items, key=lambda x: x.get("score", 0), reverse=True)[:DIGEST_TOP_N]
+    # Берём топ N (уже отсортированы по score DESC из БД)
+    top = week_items[:DIGEST_TOP_N]
 
     # Формируем промпт для синтеза
     articles_text = "\n\n".join(
@@ -296,7 +263,7 @@ async def generate_weekly_digest(anthropic_client: AsyncOpenAI) -> str:
     )
 
     try:
-        response = await anthropic_client.chat.completions.create(
+        response = await openai_client.chat.completions.create(
             model="gpt-4o",
             max_tokens=1024,
             messages=[{"role": "user", "content": prompt}],
@@ -324,27 +291,22 @@ async def generate_weekly_digest(anthropic_client: AsyncOpenAI) -> str:
 # ────────────────── Статистика ──────────────────
 
 def get_stats() -> str:
-    """Краткая статистика кэша для команды /research."""
-    cache = _load_cache()
-    if not cache:
-        return "Кэш пуст. Скаутинг ещё не запускался."
+    """Краткая статистика из Supabase для команды /research."""
+    try:
+        stats = db.get_research_stats()
+    except Exception as e:
+        return f"Ошибка получения статистики: {e}"
 
-    week_ago = (datetime.utcnow() - timedelta(days=7)).isoformat()
-    week_items = [i for i in cache if i.get("fetched_at", "") >= week_ago]
-    high_score = [i for i in week_items if (i.get("score") or 0) >= DIGEST_MIN_SCORE]
-
-    by_source: dict[str, int] = {}
-    for item in week_items:
-        src = item["source"]
-        by_source[src] = by_source.get(src, 0) + 1
+    if stats["total"] == 0:
+        return "База пуста. Скаутинг ещё не запускался."
 
     lines = [
-        f"*Research Scout*\n",
-        f"В кэше: {len(cache)} статей за {RETENTION_DAYS} дней",
-        f"За неделю: {len(week_items)} новых, {len(high_score)} с score ≥ {DIGEST_MIN_SCORE}",
+        "*Research Scout*\n",
+        f"В базе: {stats['total']} статей",
+        f"За неделю: {stats['week_count']} новых, {stats['week_high_score']} с score ≥ {DIGEST_MIN_SCORE}",
         "\n*По источникам (за неделю):*",
     ]
-    for src, count in sorted(by_source.items(), key=lambda x: -x[1]):
+    for src, count in sorted(stats["by_source"].items(), key=lambda x: -x[1]):
         lines.append(f"• {src}: {count}")
 
     return "\n".join(lines)

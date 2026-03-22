@@ -159,3 +159,61 @@ def upsert_oura(d: str, data: dict) -> None:
 def get_oura(d: str) -> dict:
     r = get_client().table("oura_data").select("data").eq("date", d).execute()
     return r.data[0]["data"] if r.data else {}
+
+
+# ─────────────────────── Research Items ───────────────────────
+
+
+def get_research_ids() -> set[str]:
+    """Вернуть все существующие id статей (для дедупликации)."""
+    r = get_client().table("research_items").select("id").execute()
+    return {row["id"] for row in (r.data or [])}
+
+
+def insert_research_items(items: list[dict]) -> None:
+    """Записать новые статьи пачкой."""
+    if not items:
+        return
+    get_client().table("research_items").insert(items).execute()
+
+
+def get_research_items_since(since_iso: str, min_score: int = 0) -> list[dict]:
+    """Вернуть статьи начиная с даты since_iso с score >= min_score."""
+    r = (
+        get_client()
+        .table("research_items")
+        .select("*")
+        .gte("fetched_at", since_iso)
+        .gte("score", min_score)
+        .order("score", desc=True)
+        .execute()
+    )
+    return r.data or []
+
+
+def get_research_stats() -> dict:
+    """Статистика: всего статей, за неделю, по источникам."""
+    from datetime import datetime, timedelta
+    week_ago = (datetime.utcnow() - timedelta(days=7)).isoformat()
+    all_r = get_client().table("research_items").select("id", count="exact").execute()
+    week_r = (
+        get_client()
+        .table("research_items")
+        .select("source, score")
+        .gte("fetched_at", week_ago)
+        .execute()
+    )
+    week_items = week_r.data or []
+    by_source: dict[str, int] = {}
+    high_score = 0
+    for item in week_items:
+        src = item["source"]
+        by_source[src] = by_source.get(src, 0) + 1
+        if (item.get("score") or 0) >= 6:
+            high_score += 1
+    return {
+        "total": all_r.count or 0,
+        "week_count": len(week_items),
+        "week_high_score": high_score,
+        "by_source": by_source,
+    }
