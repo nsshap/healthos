@@ -94,6 +94,9 @@ HELP_TEXT = """\
 /oura [дата] — синхронизировать данные с кольцом
 /recipes — список всех сохранённых рецептов
 /crisis <ситуация> — кризисная поддержка (Behaviorist)
+/digest — научный дайджест недели
+/research — статистика Research Scout
+/research run — запустить скаутинг вручную
 /role <роль> — сменить роль
 /clear — очистить историю диалога
 
@@ -752,6 +755,60 @@ async def _daily_oura_sync(context: ContextTypes.DEFAULT_TYPE):
             log.warning("Could not notify user %s: %s", uid, exc)
 
 
+# ────────────────── Research Scout jobs ───────────────────────
+
+async def _research_scout_job(context: ContextTypes.DEFAULT_TYPE):
+    """Ежедневный скаутинг научных источников (05:00 UTC)."""
+    log.info("Research Scout: запуск")
+    try:
+        count = await research_scout.run_daily_scout(_anthropic)
+        log.info("Research Scout: найдено %d новых статей", count)
+    except Exception as e:
+        log.error("Research Scout ошибка: %s", e)
+
+
+async def _research_digest_job(context: ContextTypes.DEFAULT_TYPE):
+    """Воскресный дайджест научных находок (10:00 UTC)."""
+    log.info("Research Digest: генерация")
+    try:
+        digest = await research_scout.generate_weekly_digest(_anthropic)
+        for uid in ALLOWED_IDS:
+            try:
+                await context.bot.send_message(uid, digest, parse_mode="Markdown")
+            except Exception as exc:
+                log.warning("Не удалось отправить дайджест user %s: %s", uid, exc)
+    except Exception as e:
+        log.error("Research Digest ошибка: %s", e)
+
+
+async def cmd_digest(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Запросить дайджест вручную."""
+    if not _allowed(update):
+        return
+    await update.effective_chat.send_action("typing")
+    try:
+        digest = await research_scout.generate_weekly_digest(_anthropic)
+    except Exception as e:
+        digest = f"Ошибка генерации дайджеста: {e}"
+    await _send(update, digest)
+
+
+async def cmd_research(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Показать статистику Research Scout или запустить скаутинг вручную."""
+    if not _allowed(update):
+        return
+    if ctx.args and ctx.args[0] == "run":
+        await update.effective_chat.send_action("typing")
+        try:
+            count = await research_scout.run_daily_scout(_anthropic)
+            await _send(update, f"✅ Скаутинг завершён: {count} новых статей добавлено.")
+        except Exception as e:
+            await _send(update, f"Ошибка: {e}")
+    else:
+        stats = research_scout.get_stats()
+        await _send(update, stats)
+
+
 # ─────────────────────────── Main ─────────────────────────────
 
 def main():
@@ -773,12 +830,23 @@ def main():
     app.add_handler(CommandHandler("crisis", cmd_crisis))
     app.add_handler(CommandHandler("role", cmd_role))
     app.add_handler(CommandHandler("clear", cmd_clear))
+    app.add_handler(CommandHandler("digest", cmd_digest))
+    app.add_handler(CommandHandler("research", cmd_research))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     app.add_handler(MessageHandler(filters.VOICE | filters.AUDIO, handle_voice))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-    # Daily Oura auto-sync
+    # Scheduled jobs
     app.job_queue.run_daily(_daily_oura_sync, time=OURA_SYNC_TIME)
+    app.job_queue.run_daily(
+        _research_scout_job,
+        time=dt_time(5, 0, tzinfo=ZoneInfo("UTC")),
+    )
+    app.job_queue.run_daily(
+        _research_digest_job,
+        time=dt_time(10, 0, tzinfo=ZoneInfo("UTC")),
+        days=(6,),  # воскресенье (0=пн, 6=вс)
+    )
     log.info(
         "Health OS Bot started. Allowed users: %s. Oura sync at %s daily.",
         ALLOWED_IDS or "everyone",
