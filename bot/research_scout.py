@@ -20,7 +20,7 @@ from pathlib import Path
 
 import feedparser
 import httpx
-from anthropic import AsyncAnthropic
+from openai import AsyncOpenAI
 
 log = logging.getLogger(__name__)
 
@@ -39,12 +39,12 @@ FEEDS = [
     },
     {
         "name": "FoundMyFitness (Rhonda Patrick)",
-        "url": "https://www.foundmyfitness.com/episodes.rss",
+        "url": "https://rss.libsyn.com/shows/51714/destinations/184296.xml",
         "type": "podcast",
     },
     {
         "name": "Matt Walker Podcast",
-        "url": "https://rss.com/podcasts/mattwalkerpodcast/feed.xml",
+        "url": "https://anchor.fm/s/dd6922b4/podcast/rss",
         "type": "podcast",
     },
     {
@@ -65,11 +65,6 @@ FEEDS = [
     {
         "name": "InsideTracker Blog",
         "url": "https://blog.insidetracker.com/rss.xml",
-        "type": "blog",
-    },
-    {
-        "name": "Examine.com",
-        "url": "https://examine.com/feeds/",
         "type": "blog",
     },
 ]
@@ -191,7 +186,7 @@ async def _fetch_all_feeds() -> list[dict]:
 
 # ────────────────── Скоринг ─────────────────────
 
-async def _score_batch(client: AsyncAnthropic, batch: list[dict]) -> list[dict]:
+async def _score_batch(client: AsyncOpenAI, batch: list[dict]) -> list[dict]:
     """Оценить релевантность пачки статей через Claude. Возвращает ту же пачку с полем score."""
     items_text = "\n".join(
         f"{i+1}. [{item['source']}] {item['title']}"
@@ -206,12 +201,12 @@ async def _score_batch(client: AsyncAnthropic, batch: list[dict]) -> list[dict]:
         "Никакого текста, только массив."
     )
     try:
-        response = await client.messages.create(
-            model="claude-haiku-4-5-20251001",
+        response = await client.chat.completions.create(
+            model="gpt-4o-mini",
             max_tokens=256,
             messages=[{"role": "user", "content": prompt}],
         )
-        raw = response.content[0].text.strip()
+        raw = response.choices[0].message.content.strip()
         scores = json.loads(raw)
         if len(scores) == len(batch):
             for item, score in zip(batch, scores):
@@ -223,7 +218,7 @@ async def _score_batch(client: AsyncAnthropic, batch: list[dict]) -> list[dict]:
     return batch
 
 
-async def _score_articles(client: AsyncAnthropic, items: list[dict]) -> list[dict]:
+async def _score_articles(client: AsyncOpenAI, items: list[dict]) -> list[dict]:
     """Скорить все статьи батчами."""
     to_score = [i for i in items if i["score"] is None]
     for start in range(0, len(to_score), SCORE_BATCH_SIZE):
@@ -234,7 +229,7 @@ async def _score_articles(client: AsyncAnthropic, items: list[dict]) -> list[dic
 
 # ────────────────── Основной scout ──────────────
 
-async def run_daily_scout(anthropic_client: AsyncAnthropic) -> int:
+async def run_daily_scout(anthropic_client: AsyncOpenAI) -> int:
     """
     Ежедневный скаутинг:
     1. Загрузить новые статьи из всех фидов
@@ -261,7 +256,7 @@ async def run_daily_scout(anthropic_client: AsyncAnthropic) -> int:
 
 # ────────────────── Воскресный дайджест ─────────
 
-async def generate_weekly_digest(anthropic_client: AsyncAnthropic) -> str:
+async def generate_weekly_digest(anthropic_client: AsyncOpenAI) -> str:
     """
     Генерирует дайджест топ-находок за прошедшую неделю.
     Возвращает отформатированный текст для Telegram.
@@ -301,12 +296,12 @@ async def generate_weekly_digest(anthropic_client: AsyncAnthropic) -> str:
     )
 
     try:
-        response = await anthropic_client.messages.create(
-            model="claude-sonnet-4-6",
+        response = await anthropic_client.chat.completions.create(
+            model="gpt-4o",
             max_tokens=1024,
             messages=[{"role": "user", "content": prompt}],
         )
-        synthesis = response.content[0].text.strip()
+        synthesis = response.choices[0].message.content.strip()
     except Exception as e:
         log.error("Ошибка генерации дайджеста: %s", e)
         synthesis = "Не удалось сгенерировать синтез."

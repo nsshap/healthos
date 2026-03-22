@@ -763,7 +763,7 @@ async def _research_scout_job(context: ContextTypes.DEFAULT_TYPE):
     """Ежедневный скаутинг научных источников (05:00 UTC)."""
     log.info("Research Scout: запуск")
     try:
-        count = await research_scout.run_daily_scout(_anthropic)
+        count = await research_scout.run_daily_scout(client)
         log.info("Research Scout: найдено %d новых статей", count)
     except Exception as e:
         log.error("Research Scout ошибка: %s", e)
@@ -773,7 +773,7 @@ async def _research_digest_job(context: ContextTypes.DEFAULT_TYPE):
     """Воскресный дайджест научных находок (10:00 UTC)."""
     log.info("Research Digest: генерация")
     try:
-        digest = await research_scout.generate_weekly_digest(_anthropic)
+        digest = await research_scout.generate_weekly_digest(client)
         for uid in ALLOWED_IDS:
             try:
                 await context.bot.send_message(uid, digest, parse_mode="Markdown")
@@ -789,7 +789,7 @@ async def cmd_digest(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return
     await update.effective_chat.send_action("typing")
     try:
-        digest = await research_scout.generate_weekly_digest(_anthropic)
+        digest = await research_scout.generate_weekly_digest(client)
     except Exception as e:
         digest = f"Ошибка генерации дайджеста: {e}"
     await _send(update, digest)
@@ -802,7 +802,7 @@ async def cmd_research(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if ctx.args and ctx.args[0] == "run":
         await update.effective_chat.send_action("typing")
         try:
-            count = await research_scout.run_daily_scout(_anthropic)
+            count = await research_scout.run_daily_scout(client)
             await _send(update, f"✅ Скаутинг завершён: {count} новых статей добавлено.")
         except Exception as e:
             await _send(update, f"Ошибка: {e}")
