@@ -41,6 +41,7 @@ load_dotenv()
 from context import build_system_prompt
 from tools import TOOLS, handle_tool, resolve_food_items, log_food_items_bulk
 import oura as oura_module
+import research_scout
 
 # ─────────────────────────── Config ───────────────────────────
 
@@ -605,6 +606,53 @@ async def handle_photo(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await _send(update, card)
 
 
+async def _transcribe_audio(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> str:
+    """Download voice/audio from Telegram and transcribe with Whisper."""
+    if update.message.voice:
+        file_id = update.message.voice.file_id
+        filename = "voice.ogg"
+    elif update.message.audio:
+        file_id = update.message.audio.file_id
+        filename = update.message.audio.file_name or "audio.mp3"
+    else:
+        return ""
+
+    tg_file = await ctx.bot.get_file(file_id)
+    audio_bytes = await tg_file.download_as_bytearray()
+
+    transcript = await client.audio.transcriptions.create(
+        model="whisper-1",
+        file=(filename, bytes(audio_bytes)),
+    )
+    return transcript.text.strip()
+
+
+async def handle_voice(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Handle voice and audio messages — transcribe and route as text."""
+    if not _allowed(update):
+        return
+
+    await update.effective_chat.send_action("typing")
+
+    try:
+        text = await _transcribe_audio(update, ctx)
+    except Exception as e:
+        log.exception("Whisper transcription failed: %s", e)
+        await _send(update, f"⚠️ Не удалось распознать голосовое сообщение ({e}).")
+        return
+
+    if not text:
+        await _send(update, "⚠️ Не удалось распознать голосовое сообщение.")
+        return
+
+    # Echo transcription so user sees what was recognised
+    await _send(update, f"🎤 _{text}_")
+
+    # Inject transcribed text into update and reuse handle_message logic
+    update.message.text = text
+    await handle_message(update, ctx)
+
+
 async def handle_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not _allowed(update):
         return
@@ -726,6 +774,7 @@ def main():
     app.add_handler(CommandHandler("role", cmd_role))
     app.add_handler(CommandHandler("clear", cmd_clear))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
+    app.add_handler(MessageHandler(filters.VOICE | filters.AUDIO, handle_voice))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
     # Daily Oura auto-sync
