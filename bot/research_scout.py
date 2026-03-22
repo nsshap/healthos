@@ -46,7 +46,7 @@ FEEDS = [
     },
     {
         "name": "Matt Walker Podcast",
-        "url": "https://anchor.fm/s/dd6922b4/podcast/rss",
+        "url": "https://rss.buzzsprout.com/1821163.rss",
         "type": "podcast",
     },
     {
@@ -121,7 +121,16 @@ async def _fetch_feed(client: httpx.AsyncClient, feed: dict) -> list[dict]:
         items = []
         for entry in parsed.entries[:MAX_ITEMS_PER_FEED]:
             title = entry.get("title", "").strip()
-            link = entry.get("link", "").strip()
+            link = (entry.get("link") or "").strip()
+            # Fallback: enclosure URL (e.g. Buzzsprout audio) or entry id
+            if not link:
+                enclosures = entry.get("enclosures") or entry.get("links") or []
+                for enc in enclosures:
+                    if enc.get("href"):
+                        link = enc["href"]
+                        break
+            if not link:
+                link = entry.get("id", "")
             summary = entry.get("summary", entry.get("description", "")).strip()
             # Обрезать summary до 300 символов
             if len(summary) > 300:
@@ -149,7 +158,7 @@ async def _fetch_feed(client: httpx.AsyncClient, feed: dict) -> list[dict]:
 async def _fetch_all_feeds() -> list[dict]:
     """Параллельно скачать все фиды."""
     async with httpx.AsyncClient(
-        headers={"User-Agent": "HealthOS-ResearchScout/1.0"},
+        headers={"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"},
         follow_redirects=True,
     ) as client:
         tasks = [_fetch_feed(client, feed) for feed in FEEDS]
