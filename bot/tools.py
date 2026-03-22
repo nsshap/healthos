@@ -510,6 +510,7 @@ def resolve_food_items(items: list) -> list:
             ratio = estimated_g / recipe["serving_g"]
             entry = {
                 "name": recipe["name"],
+                "quantity": item.get("quantity", ""),
                 "estimated_g": estimated_g,
                 "calories": round((recipe.get("calories") or 0) * ratio),
                 "protein": round(((recipe.get("protein") or 0) * ratio), 1),
@@ -517,12 +518,14 @@ def resolve_food_items(items: list) -> list:
                 "carbs": round(((recipe.get("carbs") or 0) * ratio), 1),
                 "fiber": round(((recipe.get("fiber") or 0) * ratio), 1) if recipe.get("fiber") else None,
                 "glycemic_index": recipe.get("glycemic_index"),
+                "insulin_index": item.get("insulin_index"),
                 "portion_note": item.get("portion_note", ""),
                 "source": "recipe",
             }
         else:
             entry = {
                 "name": item.get("name", "?"),
+                "quantity": item.get("quantity", ""),
                 "estimated_g": estimated_g,
                 "calories": item.get("calories") or 0,
                 "protein": item.get("protein") or 0,
@@ -530,6 +533,7 @@ def resolve_food_items(items: list) -> list:
                 "carbs": item.get("carbs") or 0,
                 "fiber": item.get("fiber"),
                 "glycemic_index": item.get("glycemic_index"),
+                "insulin_index": item.get("insulin_index"),
                 "portion_note": item.get("portion_note", ""),
                 "source": "estimated",
             }

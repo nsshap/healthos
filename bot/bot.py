@@ -336,35 +336,68 @@ async def cmd_clear(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("История диалога очищена.")
 
 
+def _parse_json_array(text: str) -> list:
+    """Parse a JSON array from Claude response, trying multiple strategies."""
+    import re as _re
+    text = text.strip()
+
+    if "```" in text:
+        for block in text.split("```")[1::2]:
+            cleaned = block.strip().lstrip("json").strip()
+            try:
+                return json.loads(cleaned)
+            except json.JSONDecodeError:
+                continue
+
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        pass
+
+    match = _re.search(r'\[[\s\S]*?\]', text)
+    if match:
+        try:
+            return json.loads(match.group())
+        except json.JSONDecodeError:
+            pass
+
+    raise ValueError(f"Не удалось распарсить JSON: {text[:300]}")
+
+
 async def _analyze_food_with_claude(b64: str, caption: str) -> list:
     """
     Use Claude claude-sonnet-4-6 to analyze a food photo.
-    Returns a list of food items with estimated grams and nutrition per portion.
+    Returns a list of food items with estimated grams and full nutrition.
     """
-    import re as _re
     extra = f"\nUser note: {caption}" if caption else ""
     prompt = (
         "Analyze this food photo. Return ONLY a valid JSON array — no markdown, no explanation.\n\n"
-        "For each visible food item return an object:\n"
-        '{"name": "название на русском — КРАТКО, одно слово или два: овсянка / куриная грудка / гречка / творог / банан", '
-        '"estimated_g": 150, '
-        '"portion_note": "краткое описание порции", '
-        '"confidence": "high", '
-        '"calories": 180, '
-        '"protein": 6.0, '
-        '"fat": 3.5, '
-        '"carbs": 32.0, '
-        '"fiber": 4.0, '
-        '"glycemic_index": 55}\n\n'
+        "For each visible food item return an object with ALL these fields:\n"
+        "{\n"
+        '  "name": "название на русском — КРАТКО: овсянка / куриная грудка / яйцо / банан",\n'
+        '  "quantity": "2 шт",\n'
+        '  "estimated_g": 120,\n'
+        '  "portion_note": "краткое описание порции",\n'
+        '  "calories": 156,\n'
+        '  "protein": 13.0,\n'
+        '  "fat": 11.0,\n'
+        '  "carbs": 1.0,\n'
+        '  "fiber": 0.0,\n'
+        '  "glycemic_index": null,\n'
+        '  "insulin_index": 31\n'
+        "}\n\n"
         "Rules:\n"
         "- One entry per distinct food item; mixed dish (soup, stew, salad) = one entry\n"
-        "- name: use the BASE ingredient only, NOT a full description. "
-        "  Good: 'овсянка', 'куриная грудка', 'греческий йогурт'. "
-        "  Bad: 'овсяная каша с фруктами', 'жареная куриная грудка на гриле'.\n"
-        "- Scale ALL nutrition values to the estimated portion on the plate (not per 100g)\n"
-        "- glycemic_index: null for meat/fish/eggs/cheese/pure fat\n"
-        "- fiber: null if genuinely unknown\n"
-        "- Be conservative with gram estimates; use plate/hand/utensil as visual reference"
+        "- name: BASE ingredient only. Good: 'овсянка', 'куриная грудка'. Bad: 'жареная куриная грудка на гриле'\n"
+        "- quantity: human-readable count/volume ('2 шт', '1 кусок', '200 мл', '3 ст.л.')\n"
+        "- estimated_g: total weight of this item on the plate\n"
+        "- Scale ALL nutrition to the estimated portion (NOT per 100g)\n"
+        "- glycemic_index: integer 0-100, or null for meat/fish/eggs/cheese/pure fat\n"
+        "- insulin_index: integer 0-160 (reference: white bread=100). "
+        "  Eggs≈31, beef≈51, fish≈59, white rice≈79, banana≈84, yogurt≈115. "
+        "  null only if genuinely impossible to estimate\n"
+        "- fiber: 0.0 if none, null only if truly unknown\n"
+        "- Be conservative with gram estimates; use plate/hand/utensil as reference"
         + extra
     )
 
@@ -383,32 +416,32 @@ async def _analyze_food_with_claude(b64: str, caption: str) -> list:
         }],
     )
 
-    text = response.content[0].text.strip()
+    return _parse_json_array(response.content[0].text)
 
-    # 1. Try to extract from markdown code fences
-    if "```" in text:
-        for block in text.split("```")[1::2]:
-            cleaned = block.strip().lstrip("json").strip()
-            try:
-                return json.loads(cleaned)
-            except json.JSONDecodeError:
-                continue
 
-    # 2. Try the raw text as-is
-    try:
-        return json.loads(text)
-    except json.JSONDecodeError:
-        pass
+async def _apply_food_corrections(pending: list, correction: str) -> list:
+    """
+    Apply user correction text to pending food items.
+    Returns updated items list (same structure, recalculated nutrition if grams changed).
+    """
+    pending_json = json.dumps(pending, ensure_ascii=False, indent=2)
+    prompt = (
+        f"Current food items (JSON):\n{pending_json}\n\n"
+        f"User correction: «{correction}»\n\n"
+        "Apply the correction. You may change grams, replace/add/remove items, "
+        "recalculate macros proportionally. "
+        "Keep all fields: name, quantity, estimated_g, calories, protein, fat, carbs, "
+        "fiber, glycemic_index, insulin_index, portion_note, source.\n"
+        "Return ONLY the updated JSON array. No markdown, no explanation."
+    )
 
-    # 3. Regex: find first [...] block in the response
-    match = _re.search(r'\[[\s\S]*?\]', text)
-    if match:
-        try:
-            return json.loads(match.group())
-        except json.JSONDecodeError:
-            pass
+    response = await _anthropic.messages.create(
+        model="claude-sonnet-4-6",
+        max_tokens=1024,
+        messages=[{"role": "user", "content": prompt}],
+    )
 
-    raise ValueError(f"Не удалось распарсить JSON из ответа Claude: {text[:300]}")
+    return _parse_json_array(response.content[0].text)
 
 
 def _build_confirmation_card(items: list) -> str:
@@ -417,6 +450,7 @@ def _build_confirmation_card(items: list) -> str:
 
     for i, item in enumerate(items, 1):
         name = item.get("name", "?")
+        qty = item.get("quantity", "")
         g = item.get("estimated_g", 0)
         cal = item.get("calories") or 0
         prot = item.get("protein") or 0
@@ -424,16 +458,25 @@ def _build_confirmation_card(items: list) -> str:
         carbs = item.get("carbs") or 0
         fiber = item.get("fiber")
         gi = item.get("glycemic_index")
+        ii = item.get("insulin_index")
         src = item.get("source", "estimated")
         note = item.get("portion_note", "")
 
         mark = "📚" if src == "recipe" else "~"
-        line = f"{i}. *{name}* {mark} — {g}г\n"
-        line += f"   {cal} ккал | Б:{prot}г Ж:{fat}г У:{carbs}г"
-        if fiber:
-            line += f" Кл:{round(fiber, 1)}г"
-        if gi is not None:
-            line += f" | ГИ:{gi}"
+
+        # Header: name, quantity, grams
+        qty_str = f" ({qty})" if qty else ""
+        line = f"{i}. *{name}*{qty_str} {mark} — {g}г\n"
+
+        # Macros line
+        fiber_str = f" Кл:{round(fiber, 1)}г" if fiber is not None else ""
+        line += f"   🔥 {round(cal)} ккал | Б:{round(prot,1)}г Ж:{round(fat,1)}г У:{round(carbs,1)}г{fiber_str}\n"
+
+        # Indexes line
+        gi_str = str(gi) if gi is not None else "—"
+        ii_str = str(ii) if ii is not None else "—"
+        line += f"   ГИ: {gi_str} | ИИ: {ii_str}"
+
         if note:
             line += f"\n   _{note}_"
 
@@ -446,15 +489,17 @@ def _build_confirmation_card(items: list) -> str:
             total_fiber += fiber
 
     lines.append("")
+    lines.append("─" * 20)
     total_line = (
         f"*Итого:* {round(total_cal)} ккал | "
-        f"Б:{round(total_prot, 1)}г Ж:{round(total_fat, 1)}г У:{round(total_carbs, 1)}г"
+        f"Б:{round(total_prot,1)}г Ж:{round(total_fat,1)}г У:{round(total_carbs,1)}г"
     )
     if total_fiber:
-        total_line += f" Кл:{round(total_fiber, 1)}г"
+        total_line += f" Кл:{round(total_fiber,1)}г"
     lines.append(total_line)
-    lines.append("_📚 = из базы рецептов  ~ = оценка_")
-    lines.append("\nНапиши *да* — залогирую. Или поправь что не так.")
+    lines.append("_📚 = из базы  ~ = оценка  ГИ = гликемический  ИИ = инсулиновый_")
+    lines.append("\nНапиши *да* — залогирую.")
+    lines.append("Или поправь: _«яиц было 3»_, _«порция овсянки 200г»_, _«убери банан»_")
     return "\n".join(lines)
 
 
@@ -589,15 +634,15 @@ async def handle_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     # ── Pending food confirmation after photo ──────────────────
     if uid in _pending_food and _pending_food[uid]:
-        pending = _pending_food.pop(uid)
         text_norm = text.strip().lower()
 
         if text_norm in {"нет", "отмена", "cancel", "не надо"}:
+            del _pending_food[uid]
             await _send(update, "Отменено, ничего не залогировано.")
             return
 
         if text_norm in _CONFIRM_WORDS:
-            # Direct log, no GPT-4o needed
+            pending = _pending_food.pop(uid)
             result = log_food_items_bulk(pending)
             lines = [
                 f"✅ Залогировано {result['logged_count']} позиций",
@@ -607,22 +652,18 @@ async def handle_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             await _send(update, "\n".join(lines))
             return
 
-        # User is adjusting something → pass to GPT-4o with context
-        pending_json = json.dumps(pending, ensure_ascii=False)
-        context_text = (
-            f"Пользователь прислал фото еды. Предложенные записи питания (JSON):\n{pending_json}\n\n"
-            f"Пользователь корректирует: «{text}»\n\n"
-            "Пересчитай позиции согласно корректировке (другие граммы, замена блюда и т.п.). "
-            "Залогируй итоговые данные через log_food с полным КБЖУ "
-            "(calories, protein, fat, carbs, fiber, glycemic_index)."
-        )
+        # User is making corrections → apply and show updated card (don't log yet)
+        pending = _pending_food[uid]
         await update.effective_chat.send_action("typing")
         try:
-            reply = await _claude(uid, context_text, role)
+            updated_raw = await _apply_food_corrections(pending, text)
+            updated_items = resolve_food_items(updated_raw)
+            _pending_food[uid] = updated_items
+            card = _build_confirmation_card(updated_items)
+            await _send(update, card)
         except Exception as e:
-            log.exception("Claude correction error: %s", e)
-            reply = f"Ошибка: {e}"
-        await _send(update, reply)
+            log.exception("Food correction error: %s", e)
+            await _send(update, f"Не смог применить правку: {e}\nНапиши *да* чтобы залогировать как есть, или *отмена*.")
         return
 
     # ── Normal message ─────────────────────────────────────────
