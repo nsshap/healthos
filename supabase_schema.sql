@@ -62,3 +62,25 @@ CREATE TABLE IF NOT EXISTS oura_data (
 CREATE TRIGGER oura_data_updated_at
     BEFORE UPDATE ON oura_data
     FOR EACH ROW EXECUTE FUNCTION update_updated_at();
+
+-- ─── Biomarkers ────────────────────────────────────────────────────────────────
+-- One row per marker per measurement date.
+
+CREATE TABLE IF NOT EXISTS biomarkers (
+    id             BIGSERIAL PRIMARY KEY,
+    marker         TEXT NOT NULL,       -- e.g. 'glucose_fasting', 'LDL'
+    category       TEXT NOT NULL,       -- 'metabolic', 'cardiovascular', 'liver', etc.
+    value          NUMERIC,             -- measured value (null if not yet tested)
+    date           DATE NOT NULL,       -- measurement date
+    unit           TEXT,
+    status         TEXT,                -- 'ok', 'borderline', 'ELEVATED', 'EXCELLENT', etc.
+    reference_lab  TEXT,                -- lab reference range
+    attia_optimal  TEXT,                -- Attia optimal range
+    notes          TEXT,
+    updated_at     TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE(marker, date)
+);
+
+CREATE TRIGGER biomarkers_updated_at
+    BEFORE UPDATE ON biomarkers
+    FOR EACH ROW EXECUTE FUNCTION update_updated_at();
