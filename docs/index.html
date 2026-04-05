@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Health OS — как устроена система</title>
+  <!--
+    Публичная ссылка после включения GitHub Pages:
+    Settings → Pages → Build and deployment → Source: Deploy from branch → Branch: main → Folder: /docs
+    URL будет вида: https://<user>.github.io/-healthos/
+    Railway (бот): https://railway.com/project/efd31e76-eba1-46b9-b0cc-ed5e96f584c1/service/97e30430-bfb0-492e-a117-80e299815457
+    Репозиторий: https://github.com/nsshap/-healthos
+  -->
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/reveal.js@5.0.4/dist/reveal.css" />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/reveal.js@5.0.4/dist/theme/moon.css" id="theme" />
+  <style>
+    :root {
+      --hos-accent: #5eead4;
+      --hos-muted: #94a3b8;
+    }
+    .reveal h1, .reveal h2, .reveal h3 { text-transform: none; font-weight: 600; }
+    .reveal .slides section { text-align: left; }
+    .reveal .slides section.center { text-align: center; }
+    .tag { display: inline-block; background: rgba(94, 234, 212, 0.15); color: var(--hos-accent); padding: 0.15em 0.5em; border-radius: 4px; font-size: 0.75em; margin-right: 0.35em; }
+    .muted { color: var(--hos-muted); font-size: 0.85em; }
+    .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem; align-items: start; }
+    @media (max-width: 800px) { .two-col { grid-template-columns: 1fr; } }
+    .box { background: rgba(255,255,255,0.06); border-radius: 8px; padding: 0.75rem 1rem; margin: 0.5rem 0; }
+    .sources-table { font-size: 0.55em; width: 100%; border-collapse: collapse; }
+    .sources-table th, .sources-table td { border: 1px solid rgba(255,255,255,0.15); padding: 0.35em 0.5em; }
+    .sources-table th { background: rgba(94, 234, 212, 0.12); }
+    a { color: var(--hos-accent); }
+    pre.arch { font-size: 0.45em; background: rgba(0,0,0,0.35); padding: 1em; border-radius: 8px; line-height: 1.35; overflow: visible; white-space: pre-wrap; }
+  </style>
+</head>
+<body>
+  <div class="reveal">
+    <div class="slides">
+      <section class="center">
+        <h1>Health OS</h1>
+        <p class="muted">Персональная система здоровья: стратегия + тактика + данные</p>
+        <p style="margin-top: 2rem;">
+          <a href="https://github.com/nsshap/-healthos">github.com/nsshap/-healthos</a>
+        </p>
+      </section>
+
+      <section>
+        <h2>Идея</h2>
+        <p>Два слоя по методологии <strong>Medicine 3.0</strong> (Peter Attia) и тренировочной науки:</p>
+        <div class="two-col">
+          <div class="box">
+            <span class="tag">Стратегия</span>
+            <strong>The Board</strong><br />
+            Риски на годы вперёд, биомаркеры, директивы CMO, долгосрочные цели.
+          </div>
+          <div class="box">
+            <span class="tag">Тактика</span>
+            <strong>The Field</strong><br />
+            Ежедневные калории, тренировки, сон, логи — исполнение плана.
+          </div>
+        </div>
+        <p class="muted" style="margin-top: 1rem;">Иерархия: директивы CMO &gt; предпочтения пользователя &gt; дефолтные расчёты.</p>
+      </section>
+
+      <section>
+        <h2>Как это работает в проде</h2>
+        <ul>
+          <li><strong>Telegram-бот</strong> — основной интерфейс: команды и свободный диалог.</li>
+          <li><strong>OpenAI (GPT-4o)</strong> — ответы и tool-calling (логи еды, Oura, рецепты и т.д.).</li>
+          <li><strong>Supabase</strong> — рецепты, дневные логи, кольцо Oura, таблица <code>research_items</code>.</li>
+          <li><strong>Файлы Health OS</strong> — профиль, директивы, стратегия, программа тренировок (YAML/Markdown в репозитории).</li>
+        </ul>
+        <p class="muted">Деплой бота: <a href="https://railway.com/project/efd31e76-eba1-46b9-b0cc-ed5e96f584c1/service/97e30430-bfb0-492e-a117-80e299815457?environmentId=8dc46d83-7053-4ad9-88ee-c2e7b1ca6b63">Railway</a> (сервис запускает <code>python bot/bot.py</code>).</p>
+      </section>
+
+      <section>
+        <h2>Пять ролей ассистента</h2>
+        <table style="font-size: 0.5em; width: 100%;">
+          <thead>
+            <tr><th>Роль</th><th>Задача</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>Coach</td><td>Ежедневный чек-ин, еда, тренировка дня, соблюдение директив</td></tr>
+            <tr><td>Strategist</td><td>Недельный review: TDEE, compliance, обновление strategy / program</td></tr>
+            <tr><td>CMO</td><td>Стратегия 10–30 лет, Four Horsemen, обновление <code>directives.yaml</code></td></tr>
+            <tr><td>Analyst</td><td>Анализы → структура в biomarkers, оптимумы Attia</td></tr>
+            <tr><td>Behaviorist</td><td>Срывы, тяга, пропуски — без осуждения</td></tr>
+          </tbody>
+        </table>
+        <p class="muted" style="margin-top: 0.75rem;">Команды: <code>/daily</code>, <code>/review</code>, <code>/strategy</code>, <code>/labs</code>, <code>/crisis</code>, плюс Oura и рецепты.</p>
+      </section>
+
+      <section>
+        <h2>Поток данных</h2>
+        <pre class="arch">СТРАТЕГИЯ          CMO ──► directives.yaml
+                   Analyst ──► biomarkers.yaml
+                          │
+                          ▼   directives = контракт
+ТАКТИКА            Strategist ──► strategy.md + program.yaml
+                   Coach ──► логи дня (Supabase) + ответы в чате
+
+Дополнительно: Oura (сон, шаги, Zone 2) · фото еды (Vision) · Research Scout (ниже)</pre>
+      </section>
+
+      <section>
+        <h2>Research Scout — зачем</h2>
+        <p>Автоматически собирать свежие материалы по сну, метаболизму, кардио, силе и longevity, оценивать релевантность под ваш профиль и раз в неделю выдавать <strong>сводный дайджест</strong> на русском.</p>
+        <ul>
+          <li>Каждый день: обход RSS → дедупликация → скоринг (модель) → запись в БД.</li>
+          <li><strong>Раз в неделю (воскресенье)</strong>: топ статей за 7 дней → синтез в Telegram + ссылки на источники.</li>
+        </ul>
+      </section>
+
+      <section>
+        <h2>Откуда берутся материалы</h2>
+        <p class="muted" style="margin-bottom: 0.5rem;">8 RSS/Atom-фидов (код: <code>bot/research_scout.py</code>, список <code>FEEDS</code>)</p>
+        <table class="sources-table">
+          <thead>
+            <tr><th>Источник</th><th>Тип</th><th>Формат</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>Peter Attia — The Drive</td><td>podcast</td><td>RSS</td></tr>
+            <tr><td>Huberman Lab</td><td>podcast</td><td>Megaphone RSS</td></tr>
+            <tr><td>FoundMyFitness (Rhonda Patrick)</td><td>podcast</td><td>Libsyn</td></tr>
+            <tr><td>Matt Walker Podcast</td><td>podcast</td><td>Buzzsprout</td></tr>
+            <tr><td>Nature Aging</td><td>journal</td><td>официальный RSS Nature</td></tr>
+            <tr><td>Aging Cell</td><td>journal</td><td>Wiley feed</td></tr>
+            <tr><td>Fight Aging!</td><td>blog</td><td>RSS</td></tr>
+            <tr><td>InsideTracker Blog</td><td>blog</td><td>RSS</td></tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section>
+        <h2>Как устроен пайплайн исследований</h2>
+        <ol style="font-size: 0.75em;">
+          <li>С каждого фида берётся до 10 свежих записей; статьи с уникальным URL попадают в обработку.</li>
+          <li>Скоринг 0–10 по профилю (Medicine 3.0, сон, метаболизм, ApoB/VO<sub>2</sub>, сила и т.д.).</li>
+          <li>Сохранение в Supabase; в воскресном дайджесте — статьи с score ≥ 6, топ-7 для текста + ссылки.</li>
+          <li>Ручные команды в боте: <code>/digest</code>, <code>/research</code>, <code>/research run</code>.</li>
+        </ol>
+        <p class="muted">Расписание на сервере (UTC): ежедневный скаутинг ~05:00; воскресный дайджест ~10:00.</p>
+      </section>
+
+      <section class="center">
+        <h2>Ссылки</h2>
+        <p><a href="https://github.com/nsshap/-healthos">Репозиторий на GitHub</a></p>
+        <p><a href="https://railway.com/project/efd31e76-eba1-46b9-b0cc-ed5e96f584c1/service/97e30430-bfb0-492e-a117-80e299815457?environmentId=8dc46d83-7053-4ad9-88ee-c2e7b1ca6b63">Проект на Railway (бот)</a></p>
+        <p class="muted" style="margin-top: 2rem;">Эта страница — статическая презентация. Чтобы она открывалась по URL для всех, включите GitHub Pages с папкой <code>/docs</code> на ветке <code>main</code>.</p>
+      </section>
+    </div>
+  </div>
+  <script src="https://cdn.jsdelivr.net/npm/reveal.js@5.0.4/dist/reveal.js"></script>
+  <script>
+    Reveal.initialize({
+      hash: true,
+      slideNumber: 'c/t',
+      transition: 'slide',
+      width: 1280,
+      height: 720,
+      margin: 0.08,
+    });
+  </script>
+</body>
+</html>
