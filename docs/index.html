@@ -3,44 +3,313 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="theme-color" content="#0c1222" />
   <title>Health OS — как устроена система</title>
   <!--
     Публичная ссылка после включения GitHub Pages:
     Settings → Pages → Build and deployment → Source: Deploy from branch → Branch: main → Folder: /docs
-    URL будет вида: https://<user>.github.io/-healthos/
+    URL будет вида: https://nsshap.github.io/healthos/
     Railway (бот): https://railway.com/project/efd31e76-eba1-46b9-b0cc-ed5e96f584c1/service/97e30430-bfb0-492e-a117-80e299815457
-    Репозиторий: https://github.com/nsshap/-healthos
+    Репозиторий: https://github.com/nsshap/healthos
   -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/reveal.js@5.0.4/dist/reveal.css" />
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/reveal.js@5.0.4/dist/theme/moon.css" id="theme" />
   <style>
     :root {
+      --hos-bg-deep: #070b14;
+      --hos-bg-card: rgba(18, 26, 42, 0.72);
+      --hos-border: rgba(94, 234, 212, 0.12);
+      --hos-border-strong: rgba(94, 234, 212, 0.22);
+      --hos-text: #e8edf4;
+      --hos-muted: #8b9cb3;
       --hos-accent: #5eead4;
-      --hos-muted: #94a3b8;
+      --hos-accent-dim: rgba(94, 234, 212, 0.14);
+      --hos-violet: #a78bfa;
+      --hos-blue: #38bdf8;
+      --hos-radius: 16px;
+      --hos-radius-sm: 10px;
+      --hos-shadow: 0 24px 80px rgba(0, 0, 0, 0.45);
+      --hos-blur: blur(20px);
     }
-    .reveal h1, .reveal h2, .reveal h3 { text-transform: none; font-weight: 600; }
-    .reveal .slides section { text-align: left; }
-    .reveal .slides section.center { text-align: center; }
-    .tag { display: inline-block; background: rgba(94, 234, 212, 0.15); color: var(--hos-accent); padding: 0.15em 0.5em; border-radius: 4px; font-size: 0.75em; margin-right: 0.35em; }
-    .muted { color: var(--hos-muted); font-size: 0.85em; }
-    .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem; align-items: start; }
-    @media (max-width: 800px) { .two-col { grid-template-columns: 1fr; } }
-    .box { background: rgba(255,255,255,0.06); border-radius: 8px; padding: 0.75rem 1rem; margin: 0.5rem 0; }
-    .sources-table { font-size: 0.55em; width: 100%; border-collapse: collapse; }
-    .sources-table th, .sources-table td { border: 1px solid rgba(255,255,255,0.15); padding: 0.35em 0.5em; }
-    .sources-table th { background: rgba(94, 234, 212, 0.12); }
-    a { color: var(--hos-accent); }
-    pre.arch { font-size: 0.45em; background: rgba(0,0,0,0.35); padding: 1em; border-radius: 8px; line-height: 1.35; overflow: visible; white-space: pre-wrap; }
+
+    .reveal {
+      font-family: "Inter", system-ui, -apple-system, sans-serif;
+      font-weight: 400;
+      font-size: 32px;
+      color: var(--hos-text);
+      background: var(--hos-bg-deep);
+    }
+
+    .reveal .backgrounds {
+      background:
+        radial-gradient(ellipse 120% 80% at 10% -20%, rgba(94, 234, 212, 0.12), transparent 50%),
+        radial-gradient(ellipse 90% 70% at 95% 10%, rgba(167, 139, 250, 0.1), transparent 45%),
+        radial-gradient(ellipse 70% 50% at 50% 100%, rgba(56, 189, 248, 0.08), transparent 50%),
+        linear-gradient(180deg, #070b14 0%, #0a1020 40%, #070b14 100%);
+    }
+
+    .reveal .slides section {
+      text-align: left;
+      padding: 0 0.5em;
+    }
+
+    .reveal .slides section.hos-center {
+      text-align: center;
+    }
+
+    .reveal h1,
+    .reveal h2,
+    .reveal h3 {
+      text-transform: none;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+      line-height: 1.15;
+      color: #fff;
+    }
+
+    .reveal h1 {
+      font-size: 2.2em;
+      font-weight: 800;
+      letter-spacing: -0.03em;
+      margin-bottom: 0.35em;
+      background: linear-gradient(135deg, #fff 0%, #c5f5ec 45%, var(--hos-accent) 100%);
+      -webkit-background-clip: text;
+      background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+
+    .reveal h2 {
+      font-size: 1.35em;
+      margin-bottom: 0.65em;
+      padding-bottom: 0.35em;
+      border-bottom: 1px solid var(--hos-border-strong);
+      display: inline-block;
+      width: 100%;
+    }
+
+    .reveal p,
+    .reveal li {
+      line-height: 1.5;
+      font-weight: 400;
+    }
+
+    .reveal ul { margin-left: 1.1em; }
+    .reveal ol { margin-left: 1.1em; }
+
+    .reveal a {
+      color: var(--hos-accent);
+      text-decoration: none;
+      font-weight: 500;
+      border-bottom: 1px solid rgba(94, 234, 212, 0.35);
+      transition: color 0.2s, border-color 0.2s;
+    }
+
+    .reveal a:hover {
+      color: #9ff5e8;
+      border-bottom-color: rgba(159, 245, 232, 0.6);
+    }
+
+    .reveal code {
+      font-family: "JetBrains Mono", ui-monospace, monospace;
+      font-size: 0.82em;
+      background: rgba(94, 234, 212, 0.1);
+      padding: 0.12em 0.38em;
+      border-radius: 6px;
+      border: 1px solid rgba(94, 234, 212, 0.15);
+      color: #b8f0e6;
+    }
+
+    .hos-hero-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5em;
+      font-size: 0.38em;
+      font-weight: 600;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      color: var(--hos-accent);
+      margin-bottom: 1.5em;
+    }
+
+    .hos-hero-badge::before {
+      content: "";
+      width: 2.5em;
+      height: 2px;
+      background: linear-gradient(90deg, transparent, var(--hos-accent));
+      border-radius: 2px;
+    }
+
+    .hos-subtitle {
+      color: var(--hos-muted);
+      font-size: 0.55em;
+      font-weight: 400;
+      max-width: 22em;
+      margin: 0 auto 2em;
+      line-height: 1.55;
+    }
+
+    .hos-hero .hos-subtitle { margin-left: auto; margin-right: auto; }
+
+    .hos-btn-row {
+      margin-top: 1.5em;
+      font-size: 0.42em;
+    }
+
+    .hos-btn-row a {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5em;
+      padding: 0.65em 1.2em;
+      background: var(--hos-accent-dim);
+      border: 1px solid var(--hos-border-strong);
+      border-radius: 999px;
+      border-bottom: 1px solid var(--hos-border-strong);
+      font-weight: 600;
+    }
+
+    .hos-btn-row a:hover {
+      background: rgba(94, 234, 212, 0.22);
+      color: #fff;
+    }
+
+    .tag {
+      display: inline-block;
+      font-size: 0.65em;
+      font-weight: 600;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      color: var(--hos-accent);
+      background: var(--hos-accent-dim);
+      padding: 0.2em 0.55em;
+      border-radius: 6px;
+      margin-right: 0.4em;
+      border: 1px solid rgba(94, 234, 212, 0.2);
+    }
+
+    .tag--violet {
+      color: #c4b5fd;
+      background: rgba(167, 139, 250, 0.12);
+      border-color: rgba(167, 139, 250, 0.25);
+    }
+
+    .muted {
+      color: var(--hos-muted);
+      font-size: 0.78em;
+    }
+
+    .two-col {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 1.25rem;
+      align-items: stretch;
+      margin-top: 0.75rem;
+    }
+
+    @media (max-width: 900px) {
+      .two-col { grid-template-columns: 1fr; }
+    }
+
+    .box {
+      background: var(--hos-bg-card);
+      backdrop-filter: var(--hos-blur);
+      -webkit-backdrop-filter: var(--hos-blur);
+      border: 1px solid var(--hos-border);
+      border-radius: var(--hos-radius);
+      padding: 1rem 1.15rem;
+      margin: 0.5rem 0;
+      box-shadow: var(--hos-shadow);
+    }
+
+    .hos-table-wrap {
+      margin-top: 0.75rem;
+      border-radius: var(--hos-radius-sm);
+      overflow: hidden;
+      border: 1px solid var(--hos-border);
+      font-size: 0.48em;
+    }
+
+    .hos-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .hos-table th,
+    .hos-table td {
+      padding: 0.45em 0.65em;
+      text-align: left;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+    }
+
+    .hos-table tr:last-child td { border-bottom: none; }
+
+    .hos-table th {
+      background: rgba(94, 234, 212, 0.08);
+      color: var(--hos-accent);
+      font-weight: 600;
+      font-size: 0.95em;
+      letter-spacing: 0.02em;
+    }
+
+    .hos-table tbody tr:nth-child(even) {
+      background: rgba(255, 255, 255, 0.02);
+    }
+
+    .hos-table tbody tr:hover {
+      background: rgba(94, 234, 212, 0.05);
+    }
+
+    .sources-table { font-size: 0.5em; }
+
+    pre.arch {
+      font-family: "JetBrains Mono", ui-monospace, monospace;
+      font-size: 0.42em;
+      line-height: 1.45;
+      background: rgba(6, 10, 20, 0.85);
+      border: 1px solid var(--hos-border);
+      border-radius: var(--hos-radius-sm);
+      padding: 1.1em 1.25em;
+      margin-top: 0.75rem;
+      overflow: visible;
+      white-space: pre-wrap;
+      color: #b4c4d9;
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+    }
+
+    .reveal .progress {
+      color: var(--hos-accent);
+      height: 3px;
+    }
+
+    .reveal .controls {
+      color: var(--hos-muted);
+    }
+
+    .reveal .slide-number {
+      font-family: "JetBrains Mono", monospace;
+      font-size: 0.55em;
+      color: var(--hos-muted);
+      opacity: 0.85;
+    }
+
+    .hos-footnote {
+      margin-top: 1.25rem;
+      padding-top: 1rem;
+      border-top: 1px dashed var(--hos-border);
+    }
   </style>
 </head>
 <body>
   <div class="reveal">
     <div class="slides">
-      <section class="center">
+      <section class="hos-center hos-hero">
+        <div class="hos-hero-badge">Система здоровья</div>
         <h1>Health OS</h1>
-        <p class="muted">Персональная система здоровья: стратегия + тактика + данные</p>
-        <p style="margin-top: 2rem;">
-          <a href="https://github.com/nsshap/-healthos">github.com/nsshap/-healthos</a>
+        <p class="hos-subtitle">Персональная система здоровья: стратегия + тактика + данные</p>
+        <p class="hos-btn-row">
+          <a href="https://github.com/nsshap/healthos">github.com/nsshap/healthos</a>
         </p>
       </section>
 
@@ -54,7 +323,7 @@
             Риски на годы вперёд, биомаркеры, директивы CMO, долгосрочные цели.
           </div>
           <div class="box">
-            <span class="tag">Тактика</span>
+            <span class="tag tag--violet">Тактика</span>
             <strong>The Field</strong><br />
             Ежедневные калории, тренировки, сон, логи — исполнение плана.
           </div>
@@ -75,18 +344,20 @@
 
       <section>
         <h2>Пять ролей ассистента</h2>
-        <table style="font-size: 0.5em; width: 100%;">
-          <thead>
-            <tr><th>Роль</th><th>Задача</th></tr>
-          </thead>
-          <tbody>
-            <tr><td>Coach</td><td>Ежедневный чек-ин, еда, тренировка дня, соблюдение директив</td></tr>
-            <tr><td>Strategist</td><td>Недельный review: TDEE, compliance, обновление strategy / program</td></tr>
-            <tr><td>CMO</td><td>Стратегия 10–30 лет, Four Horsemen, обновление <code>directives.yaml</code></td></tr>
-            <tr><td>Analyst</td><td>Анализы → структура в biomarkers, оптимумы Attia</td></tr>
-            <tr><td>Behaviorist</td><td>Срывы, тяга, пропуски — без осуждения</td></tr>
-          </tbody>
-        </table>
+        <div class="hos-table-wrap">
+          <table class="hos-table">
+            <thead>
+              <tr><th>Роль</th><th>Задача</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Coach</td><td>Ежедневный чек-ин, еда, тренировка дня, соблюдение директив</td></tr>
+              <tr><td>Strategist</td><td>Недельный review: TDEE, compliance, обновление strategy / program</td></tr>
+              <tr><td>CMO</td><td>Стратегия 10–30 лет, Four Horsemen, обновление <code>directives.yaml</code></td></tr>
+              <tr><td>Analyst</td><td>Анализы → структура в biomarkers, оптимумы Attia</td></tr>
+              <tr><td>Behaviorist</td><td>Срывы, тяга, пропуски — без осуждения</td></tr>
+            </tbody>
+          </table>
+        </div>
         <p class="muted" style="margin-top: 0.75rem;">Команды: <code>/daily</code>, <code>/review</code>, <code>/strategy</code>, <code>/labs</code>, <code>/crisis</code>, плюс Oura и рецепты.</p>
       </section>
 
@@ -114,21 +385,23 @@
       <section>
         <h2>Откуда берутся материалы</h2>
         <p class="muted" style="margin-bottom: 0.5rem;">8 RSS/Atom-фидов (код: <code>bot/research_scout.py</code>, список <code>FEEDS</code>)</p>
-        <table class="sources-table">
-          <thead>
-            <tr><th>Источник</th><th>Тип</th><th>Формат</th></tr>
-          </thead>
-          <tbody>
-            <tr><td>Peter Attia — The Drive</td><td>podcast</td><td>RSS</td></tr>
-            <tr><td>Huberman Lab</td><td>podcast</td><td>Megaphone RSS</td></tr>
-            <tr><td>FoundMyFitness (Rhonda Patrick)</td><td>podcast</td><td>Libsyn</td></tr>
-            <tr><td>Matt Walker Podcast</td><td>podcast</td><td>Buzzsprout</td></tr>
-            <tr><td>Nature Aging</td><td>journal</td><td>официальный RSS Nature</td></tr>
-            <tr><td>Aging Cell</td><td>journal</td><td>Wiley feed</td></tr>
-            <tr><td>Fight Aging!</td><td>blog</td><td>RSS</td></tr>
-            <tr><td>InsideTracker Blog</td><td>blog</td><td>RSS</td></tr>
-          </tbody>
-        </table>
+        <div class="hos-table-wrap sources-table">
+          <table class="hos-table">
+            <thead>
+              <tr><th>Источник</th><th>Тип</th><th>Формат</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Peter Attia — The Drive</td><td>podcast</td><td>RSS</td></tr>
+              <tr><td>Huberman Lab</td><td>podcast</td><td>Megaphone RSS</td></tr>
+              <tr><td>FoundMyFitness (Rhonda Patrick)</td><td>podcast</td><td>Libsyn</td></tr>
+              <tr><td>Matt Walker Podcast</td><td>podcast</td><td>Buzzsprout</td></tr>
+              <tr><td>Nature Aging</td><td>journal</td><td>официальный RSS Nature</td></tr>
+              <tr><td>Aging Cell</td><td>journal</td><td>Wiley feed</td></tr>
+              <tr><td>Fight Aging!</td><td>blog</td><td>RSS</td></tr>
+              <tr><td>InsideTracker Blog</td><td>blog</td><td>RSS</td></tr>
+            </tbody>
+          </table>
+        </div>
       </section>
 
       <section>
@@ -142,11 +415,13 @@
         <p class="muted">Расписание на сервере (UTC): ежедневный скаутинг ~05:00; воскресный дайджест ~10:00.</p>
       </section>
 
-      <section class="center">
+      <section class="hos-center">
         <h2>Ссылки</h2>
-        <p><a href="https://github.com/nsshap/-healthos">Репозиторий на GitHub</a></p>
+        <p><a href="https://github.com/nsshap/healthos">Репозиторий на GitHub</a></p>
         <p><a href="https://railway.com/project/efd31e76-eba1-46b9-b0cc-ed5e96f584c1/service/97e30430-bfb0-492e-a117-80e299815457?environmentId=8dc46d83-7053-4ad9-88ee-c2e7b1ca6b63">Проект на Railway (бот)</a></p>
-        <p class="muted" style="margin-top: 2rem;">Эта страница — статическая презентация. Чтобы она открывалась по URL для всех, включите GitHub Pages с папкой <code>/docs</code> на ветке <code>main</code>.</p>
+        <div class="hos-footnote muted" style="max-width: 28em; margin-left: auto; margin-right: auto;">
+          Эта страница — статическая презентация. Чтобы она открывалась по URL для всех, включите GitHub Pages с папкой <code>/docs</code> на ветке <code>main</code>.
+        </div>
       </section>
     </div>
   </div>
@@ -154,11 +429,13 @@
   <script>
     Reveal.initialize({
       hash: true,
-      slideNumber: 'c/t',
-      transition: 'slide',
+      slideNumber: "c/t",
+      transition: "fade",
+      transitionSpeed: "default",
       width: 1280,
       height: 720,
       margin: 0.08,
+      backgroundTransition: "fade",
     });
   </script>
 </body>
