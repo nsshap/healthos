@@ -1,16 +1,16 @@
 <!DOCTYPE html>
-<html lang="ru">
+<html lang="en">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta name="theme-color" content="#0c1222" />
-  <title>Health OS — как устроена система</title>
+  <title>Health OS — how the system works</title>
   <!--
-    Публичная ссылка после включения GitHub Pages:
+    Public URL after enabling GitHub Pages:
     Settings → Pages → Build and deployment → Source: Deploy from branch → Branch: main → Folder: /docs
-    URL: https://nsshap.github.io/healthos/ · EN: …/index-en.html
-    Railway (бот): https://railway.com/project/efd31e76-eba1-46b9-b0cc-ed5e96f584c1/service/97e30430-bfb0-492e-a117-80e299815457
-    Репозиторий: https://github.com/nsshap/healthos
+    Example: https://nsshap.github.io/healthos/index-en.html
+    Railway (bot): https://railway.com/project/efd31e76-eba1-46b9-b0cc-ed5e96f584c1/service/97e30430-bfb0-492e-a117-80e299815457
+    Repository: https://github.com/nsshap/healthos
   -->
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -320,101 +320,101 @@
   </style>
 </head>
 <body>
-  <div class="hos-lang-switch"><a href="index-en.html">English</a></div>
+  <div class="hos-lang-switch"><a href="index.html">Русский</a></div>
   <div class="reveal">
     <div class="slides">
       <section class="hos-center hos-hero">
-        <div class="hos-hero-badge">Система здоровья</div>
+        <div class="hos-hero-badge">Health system</div>
         <h1>Health OS</h1>
-        <p class="hos-subtitle">Персональная система здоровья: стратегия + тактика + данные</p>
+        <p class="hos-subtitle">A personal health system: strategy + tactics + data</p>
         <p class="hos-btn-row">
           <a href="https://github.com/nsshap/healthos">github.com/nsshap/healthos</a>
         </p>
       </section>
 
       <section>
-        <h2>Идея</h2>
-        <p>Два слоя по методологии <strong>Medicine 3.0</strong> (Peter Attia) и тренировочной науки:</p>
+        <h2>The idea</h2>
+        <p>Two layers, grounded in <strong>Medicine 3.0</strong> (Peter Attia) and exercise science:</p>
         <div class="two-col">
           <div class="box">
-            <span class="tag">Стратегия</span>
+            <span class="tag">Strategy</span>
             <strong>The Board</strong><br />
-            Риски на годы вперёд, биомаркеры, директивы CMO, долгосрочные цели.
+            Long-horizon risks, biomarkers, CMO directives, long-term goals.
           </div>
           <div class="box">
-            <span class="tag tag--violet">Тактика</span>
+            <span class="tag tag--violet">Tactics</span>
             <strong>The Field</strong><br />
-            Ежедневные калории, тренировки, сон, логи — исполнение плана.
+            Daily calories, training, sleep, logs — executing the plan.
           </div>
         </div>
-        <p class="muted" style="margin-top: 1rem;">Иерархия: директивы CMO &gt; предпочтения пользователя &gt; дефолтные расчёты.</p>
+        <p class="muted" style="margin-top: 1rem;">Hierarchy: CMO directives &gt; user preferences &gt; default calculations.</p>
       </section>
 
       <section>
-        <h2>Как это работает в проде</h2>
+        <h2>How it runs in production</h2>
         <ul>
-          <li><strong>Telegram-бот</strong> — основной интерфейс: команды и свободный диалог.</li>
-          <li><strong>OpenAI (GPT-4o)</strong> — ответы и tool-calling (логи еды, Oura, рецепты и т.д.).</li>
-          <li><strong>Supabase</strong> — рецепты, дневные логи, кольцо Oura, таблица <code>research_items</code>.</li>
-          <li><strong>Файлы Health OS</strong> — профиль, директивы, стратегия, программа тренировок (YAML/Markdown в репозитории).</li>
+          <li><strong>Telegram bot</strong> — main interface: commands and free-form chat.</li>
+          <li><strong>OpenAI (GPT-4o)</strong> — replies and tool-calling (food logs, Oura, recipes, etc.).</li>
+          <li><strong>Supabase</strong> — recipes, daily logs, Oura ring data, <code>research_items</code> table.</li>
+          <li><strong>Health OS files</strong> — profile, directives, strategy, training program (YAML/Markdown in the repo).</li>
         </ul>
-        <p class="muted">Деплой бота: <a href="https://railway.com/project/efd31e76-eba1-46b9-b0cc-ed5e96f584c1/service/97e30430-bfb0-492e-a117-80e299815457?environmentId=8dc46d83-7053-4ad9-88ee-c2e7b1ca6b63">Railway</a> (сервис запускает <code>python bot/bot.py</code>).</p>
+        <p class="muted">Bot deploy: <a href="https://railway.com/project/efd31e76-eba1-46b9-b0cc-ed5e96f584c1/service/97e30430-bfb0-492e-a117-80e299815457?environmentId=8dc46d83-7053-4ad9-88ee-c2e7b1ca6b63">Railway</a> (service runs <code>python bot/bot.py</code>).</p>
       </section>
 
       <section>
-        <h2>Пять ролей ассистента</h2>
+        <h2>Five assistant roles</h2>
         <div class="hos-table-wrap">
           <table class="hos-table">
             <thead>
-              <tr><th>Роль</th><th>Задача</th></tr>
+              <tr><th>Role</th><th>Job</th></tr>
             </thead>
             <tbody>
-              <tr><td>Coach</td><td>Ежедневный чек-ин, еда, тренировка дня, соблюдение директив</td></tr>
-              <tr><td>Strategist</td><td>Недельный review: TDEE, compliance, обновление strategy / program</td></tr>
-              <tr><td>CMO</td><td>Стратегия 10–30 лет, Four Horsemen, обновление <code>directives.yaml</code></td></tr>
-              <tr><td>Analyst</td><td>Анализы → структура в biomarkers, оптимумы Attia</td></tr>
-              <tr><td>Behaviorist</td><td>Срывы, тяга, пропуски — без осуждения</td></tr>
+              <tr><td>Coach</td><td>Daily check-in, food, today’s workout, directive compliance</td></tr>
+              <tr><td>Strategist</td><td>Weekly review: TDEE, compliance, updating strategy / program</td></tr>
+              <tr><td>CMO</td><td>10–30 year horizon, Four Horsemen, updating <code>directives.yaml</code></td></tr>
+              <tr><td>Analyst</td><td>Lab results → structured biomarkers, Attia-style optima</td></tr>
+              <tr><td>Behaviorist</td><td>Binges, cravings, skipped sessions — no judgment</td></tr>
             </tbody>
           </table>
         </div>
-        <p class="muted" style="margin-top: 0.75rem;">Команды: <code>/daily</code>, <code>/review</code>, <code>/strategy</code>, <code>/labs</code>, <code>/crisis</code>, плюс Oura и рецепты.</p>
+        <p class="muted" style="margin-top: 0.75rem;">Commands: <code>/daily</code>, <code>/review</code>, <code>/strategy</code>, <code>/labs</code>, <code>/crisis</code>, plus Oura and recipes.</p>
       </section>
 
       <section>
-        <h2>Поток данных</h2>
-        <pre class="arch">СТРАТЕГИЯ          CMO ──► directives.yaml
-                   Analyst ──► biomarkers.yaml
-                          │
-                          ▼   directives = контракт
-ТАКТИКА            Strategist ──► strategy.md + program.yaml
-                   Coach ──► логи дня (Supabase) + ответы в чате
+        <h2>Data flow</h2>
+        <pre class="arch">STRATEGY          CMO ──► directives.yaml
+                  Analyst ──► biomarkers.yaml
+                         │
+                         ▼   directives = contract
+TACTICS           Strategist ──► strategy.md + program.yaml
+                  Coach ──► daily logs (Supabase) + chat replies
 
-Дополнительно: Oura (сон, шаги, Zone 2) · фото еды (Vision) · Research Scout (ниже)</pre>
+Also: Oura (sleep, steps, Zone 2) · food photos (Vision) · Research Scout (below)</pre>
       </section>
 
       <section>
-        <h2>Research Scout — зачем</h2>
-        <p>Автоматически собирать свежие материалы по сну, метаболизму, кардио, силе и longevity, оценивать релевантность под ваш профиль и раз в неделю выдавать <strong>сводный дайджест</strong> на русском.</p>
+        <h2>Research Scout — why it exists</h2>
+        <p>Automatically gather fresh material on sleep, metabolism, cardio, strength, and longevity; score relevance to your profile; and once a week deliver a <strong>summary digest</strong> in Russian.</p>
         <ul>
-          <li>Каждый день: обход RSS → дедупликация → скоринг (модель) → запись в БД.</li>
-          <li><strong>Раз в неделю (воскресенье)</strong>: топ статей за 7 дней → синтез в Telegram + ссылки на источники.</li>
+          <li>Every day: crawl RSS → dedupe → model scoring → write to the database.</li>
+          <li><strong>Once a week (Sunday)</strong>: top articles from the last 7 days → synthesis in Telegram + source links.</li>
         </ul>
       </section>
 
       <section>
-        <h2>Откуда берутся материалы</h2>
-        <p class="muted" style="margin-bottom: 0.5rem;">8 RSS/Atom-фидов (код: <code>bot/research_scout.py</code>, список <code>FEEDS</code>)</p>
+        <h2>Where the content comes from</h2>
+        <p class="muted" style="margin-bottom: 0.5rem;">8 RSS/Atom feeds (code: <code>bot/research_scout.py</code>, list <code>FEEDS</code>)</p>
         <div class="hos-table-wrap sources-table">
           <table class="hos-table">
             <thead>
-              <tr><th>Источник</th><th>Тип</th><th>Формат</th></tr>
+              <tr><th>Source</th><th>Type</th><th>Format</th></tr>
             </thead>
             <tbody>
               <tr><td>Peter Attia — The Drive</td><td>podcast</td><td>RSS</td></tr>
               <tr><td>Huberman Lab</td><td>podcast</td><td>Megaphone RSS</td></tr>
               <tr><td>FoundMyFitness (Rhonda Patrick)</td><td>podcast</td><td>Libsyn</td></tr>
               <tr><td>Matt Walker Podcast</td><td>podcast</td><td>Buzzsprout</td></tr>
-              <tr><td>Nature Aging</td><td>journal</td><td>официальный RSS Nature</td></tr>
+              <tr><td>Nature Aging</td><td>journal</td><td>official Nature RSS</td></tr>
               <tr><td>Aging Cell</td><td>journal</td><td>Wiley feed</td></tr>
               <tr><td>Fight Aging!</td><td>blog</td><td>RSS</td></tr>
               <tr><td>InsideTracker Blog</td><td>blog</td><td>RSS</td></tr>
@@ -424,22 +424,22 @@
       </section>
 
       <section>
-        <h2>Как устроен пайплайн исследований</h2>
+        <h2>How the research pipeline works</h2>
         <ol style="font-size: 0.75em;">
-          <li>С каждого фида берётся до 10 свежих записей; статьи с уникальным URL попадают в обработку.</li>
-          <li>Скоринг 0–10 по профилю (Medicine 3.0, сон, метаболизм, ApoB/VO<sub>2</sub>, сила и т.д.).</li>
-          <li>Сохранение в Supabase; в воскресном дайджесте — статьи с score ≥ 6, топ-7 для текста + ссылки.</li>
-          <li>Ручные команды в боте: <code>/digest</code>, <code>/research</code>, <code>/research run</code>.</li>
+          <li>Up to 10 newest entries per feed; items with a unique URL enter processing.</li>
+          <li>Score 0–10 vs your profile (Medicine 3.0, sleep, metabolism, ApoB/VO<sub>2</sub>, strength, etc.).</li>
+          <li>Stored in Supabase; Sunday digest includes items with score ≥ 6, top 7 for the narrative + links.</li>
+          <li>Manual bot commands: <code>/digest</code>, <code>/research</code>, <code>/research run</code>.</li>
         </ol>
-        <p class="muted">Расписание на сервере (UTC): ежедневный скаутинг ~05:00; воскресный дайджест ~10:00.</p>
+        <p class="muted">Server schedule (UTC): daily scout ~05:00; Sunday digest ~10:00.</p>
       </section>
 
       <section class="hos-center">
-        <h2>Ссылки</h2>
-        <p><a href="https://github.com/nsshap/healthos">Репозиторий на GitHub</a></p>
-        <p><a href="https://railway.com/project/efd31e76-eba1-46b9-b0cc-ed5e96f584c1/service/97e30430-bfb0-492e-a117-80e299815457?environmentId=8dc46d83-7053-4ad9-88ee-c2e7b1ca6b63">Проект на Railway (бот)</a></p>
+        <h2>Links</h2>
+        <p><a href="https://github.com/nsshap/healthos">GitHub repository</a></p>
+        <p><a href="https://railway.com/project/efd31e76-eba1-46b9-b0cc-ed5e96f584c1/service/97e30430-bfb0-492e-a117-80e299815457?environmentId=8dc46d83-7053-4ad9-88ee-c2e7b1ca6b63">Railway project (bot)</a></p>
         <div class="hos-footnote muted" style="max-width: 28em; margin-left: auto; margin-right: auto;">
-          Эта страница — статическая презентация. Чтобы она открывалась по URL для всех, включите GitHub Pages с папкой <code>/docs</code> на ветке <code>main</code>.
+          This page is a static deck. To serve it publicly, enable GitHub Pages with the <code>/docs</code> folder on <code>main</code>.
         </div>
       </section>
     </div>
