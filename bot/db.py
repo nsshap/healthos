@@ -4,9 +4,19 @@ Single source of truth for recipes, daily logs, and Oura data.
 """
 import os
 import time
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
+from zoneinfo import ZoneInfo
 
 from supabase import create_client, Client
+
+# Daily logs are keyed by the user's wall-clock day, not the server's UTC
+# day. Railway runs in UTC so date.today() would silently roll over to
+# tomorrow's row at 22:00 / 23:00 local in Amsterdam.
+LOCAL_TZ = ZoneInfo("Europe/Amsterdam")
+
+
+def _today_local() -> date:
+    return datetime.now(LOCAL_TZ).date()
 
 _client: Client | None = None
 
@@ -102,7 +112,7 @@ def update_recipe_by_id(recipe_id: int, changes: dict) -> dict:
 
 def get_log(d: str = None) -> dict:
     """Return log for date d, or an empty template if none exists."""
-    d = d or date.today().isoformat()
+    d = d or _today_local().isoformat()
     r = get_client().table("daily_logs").select("*").eq("date", d).execute()
     if r.data:
         row = r.data[0]
@@ -134,7 +144,7 @@ def upsert_log(d: str, data: dict) -> dict:
 
 def get_week_logs() -> list[dict]:
     """Return logs for the last 7 days (oldest first)."""
-    start = (date.today() - timedelta(days=7)).isoformat()
+    start = (_today_local() - timedelta(days=7)).isoformat()
     r = (
         get_client()
         .table("daily_logs")

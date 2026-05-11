@@ -5,10 +5,25 @@ Lab files (PDFs, images) are still read from local filesystem.
 """
 from pathlib import Path
 from datetime import date, datetime
+from zoneinfo import ZoneInfo
 import base64
 import yaml
 
 import db
+
+# Server runs in UTC on Railway; user lives in Amsterdam. All HH:MM
+# stamps written to daily_logs.meals MUST reflect the user's wall clock,
+# otherwise analyse_meal_response (which interprets meal.time as local)
+# looks at the wrong 2-hour window.
+LOCAL_TZ = ZoneInfo("Europe/Amsterdam")
+
+
+def _now_local_hhmm() -> str:
+    return datetime.now(LOCAL_TZ).strftime("%H:%M")
+
+
+def _today_local() -> str:
+    return datetime.now(LOCAL_TZ).date().isoformat()
 
 BASE = Path(__file__).parent.parent
 
@@ -309,7 +324,7 @@ def handle_tool(name: str, args: dict) -> dict:
             log["meals"] = []
 
         meal = {
-            "time": args.get("time") or datetime.now().strftime("%H:%M"),
+            "time": args.get("time") or _now_local_hhmm(),
             "description": args["description"],
             "calories": args["calories"],
             "protein": args["protein"],
@@ -381,7 +396,7 @@ def handle_tool(name: str, args: dict) -> dict:
         total_carbs = sum(m.get("carbs", 0) or 0 for m in meals)
         total_fiber = sum(m.get("fiber", 0) or 0 for m in meals)
         return {
-            "date": date.today().isoformat(),
+            "date": _today_local(),
             "weight_morning": log.get("weight_morning"),
             "calories": {
                 "consumed": total_cal,
@@ -510,7 +525,7 @@ def handle_tool(name: str, args: dict) -> dict:
             if field in args and args[field] is not None:
                 changes[field] = args[field]
         changes["estimated"] = False
-        changes["updated"] = date.today().isoformat()
+        changes["updated"] = _today_local()
 
         db.update_recipe_by_id(recipe["id"], changes)
         return {"updated": True, "name": recipe["name"], "changed_fields": changes}
@@ -539,7 +554,7 @@ def handle_tool(name: str, args: dict) -> dict:
             "carbs": args.get("carbs"),
             "glycemic_index": args.get("glycemic_index"),
             "ingredients": args.get("ingredients", ""),
-            "added": date.today().isoformat(),
+            "added": _today_local(),
         }
         db.insert_recipe(entry)
         total = len(db.get_all_recipes())
@@ -604,7 +619,7 @@ def log_food_items_bulk(items: list) -> dict:
     if "meals" not in log:
         log["meals"] = []
 
-    now_time = datetime.now().strftime("%H:%M")
+    now_time = _now_local_hhmm()
     for item in items:
         meal = {
             "time": now_time,
