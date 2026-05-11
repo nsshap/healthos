@@ -126,6 +126,63 @@ async def _send(update: Update, text: str):
         await update.message.reply_text(chunk, parse_mode="Markdown")
 
 
+def _format_log_ack(tool_name: str, result: dict) -> str | None:
+    """
+    Format a one-line acknowledgement for a successful log_* tool call.
+    Returns None if the tool wasn't a logging tool or didn't succeed.
+    """
+    if not isinstance(result, dict):
+        return None
+
+    if tool_name == "log_food":
+        meal = result.get("logged") or {}
+        if not meal:
+            return None
+        line = f"• {meal.get('time', '?')} — {meal.get('description', '?')} ({meal.get('calories', 0)} ккал, {meal.get('protein', 0)}г белка)"
+        return line
+
+    if tool_name == "edit_food_log":
+        if not result.get("updated"):
+            return None
+        after = result.get("after") or {}
+        return f"✏️ {after.get('time', '?')} — {after.get('description', '?')} ({after.get('calories', 0)} ккал)"
+
+    if tool_name == "log_workout":
+        w = result.get("logged") or {}
+        if not w:
+            return None
+        return f"🏋️ {w.get('name', '?')} ({w.get('duration_min', '?')} мин, {w.get('type', '?')})"
+
+    if tool_name == "log_sleep":
+        s = result.get("logged") or {}
+        if not s:
+            return None
+        return f"😴 Сон: {s.get('hours', '?')} ч ({s.get('quality', '?')})"
+
+    if tool_name == "log_weight":
+        w = result.get("logged")
+        if w is None:
+            return None
+        return f"⚖️ Вес: {w} кг"
+
+    return None
+
+
+def _build_log_summary(acks: list[str], totals: dict | None) -> str:
+    """Build the final acknowledgement block appended after the LLM text."""
+    lines = ["✅ *Записано:*"] + acks
+    if totals:
+        cal = totals.get("calories")
+        prot = totals.get("protein")
+        remaining = totals.get("remaining_calories")
+        if cal is not None:
+            tail = f"\nБюджет: *{cal}* ккал съедено, {prot}г белка"
+            if remaining is not None:
+                tail += f" · осталось *{remaining}* ккал"
+            lines.append(tail)
+    return "\n".join(lines)
+
+
 async def _send_reply(update: Update, reply: tuple[str, list[tuple[bytes, str]]]):
     """Send a (text, charts) reply from _claude — charts first, then text."""
     text, charts = reply
@@ -156,6 +213,8 @@ async def _claude(user_id: int, content: "str | list", role: str) -> tuple[str, 
     system = build_system_prompt(role)
 
     outgoing_charts: list[tuple[bytes, str]] = []
+    log_acks: list[str] = []  # deterministic «✅ записано» lines
+    last_totals: dict | None = None  # day totals from the latest log_food / edit_food_log
 
     # Agentic function-calling loop
     while True:
@@ -194,6 +253,20 @@ async def _claude(user_id: int, content: "str | list", role: str) -> tuple[str, 
                     result = await libre_module.handle_tool(tc.function.name, args)
                 else:
                     result = handle_tool(tc.function.name, args)
+
+                # Collect deterministic acknowledgement for log_* tools.
+                ack = _format_log_ack(tc.function.name, result)
+                if ack:
+                    log_acks.append(ack)
+                    if isinstance(result, dict):
+                        day_total = result.get("day_total") or {}
+                        remaining = result.get("remaining") or {}
+                        if day_total or remaining:
+                            last_totals = {
+                                "calories": day_total.get("calories"),
+                                "protein": day_total.get("protein"),
+                                "remaining_calories": remaining.get("calories"),
+                            }
 
                 # Check if tool returned image data (lab files)
                 if isinstance(result, dict) and result.get("type") == "image":
@@ -247,6 +320,15 @@ async def _claude(user_id: int, content: "str | list", role: str) -> tuple[str, 
                 history.append({"role": "user", "content": img_content})
         else:
             text = message.content or "..."
+
+            # Deterministic acknowledgement: append a structured «записано»
+            # block whenever any log_* tool succeeded in this exchange.
+            # This makes silent failures impossible — the user always sees
+            # what hit Supabase, even if the LLM forgets to mention it.
+            if log_acks:
+                ack_block = _build_log_summary(log_acks, last_totals)
+                text = f"{text}\n\n{ack_block}" if text.strip() else ack_block
+
             history.append({"role": "assistant", "content": text})
             return text, outgoing_charts
 
@@ -974,7 +1056,9 @@ def main():
         ALLOWED_IDS or "everyone",
         OURA_SYNC_TIME.strftime("%H:%M"),
     )
-    app.run_polling(drop_pending_updates=True)
+    # drop_pending_updates=False: после рестарта подбираем всё, что пришло
+    # пока бот был offline (rebuild/redeploy на Railway).
+    app.run_polling(drop_pending_updates=False)
 
 
 if __name__ == "__main__":

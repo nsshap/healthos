@@ -227,7 +227,24 @@ async def _api_get(client: httpx.AsyncClient, path: str) -> dict:
             log.info("LibreLinkUp 401, re-logging in")
             s = await _get_session(client, force=True)
             continue
-        r.raise_for_status()
+        if r.status_code == 403:
+            body = r.text[:500]
+            raise RuntimeError(
+                f"LibreLinkUp 403 on {path}. Это значит, что Abbott принял логин, "
+                "но запретил доступ к данным. Самые частые причины: "
+                "(1) invitation от основного LibreLink ещё не accepted во втором "
+                "приложении LibreLinkUp — открой LibreLinkUp на iPhone, "
+                "проверь badge с приглашением и нажми Accept; "
+                "(2) появилось обновление Terms & Conditions — нужно подтвердить в "
+                "LibreLinkUp; "
+                "(3) email второго аккаунта ещё не подтверждён. "
+                f"Ответ Abbott: {body}"
+            )
+        if r.status_code >= 400:
+            body = r.text[:500]
+            raise RuntimeError(
+                f"LibreLinkUp {r.status_code} on {path}: {body}"
+            )
         return r.json()
     raise RuntimeError(f"LibreLinkUp GET {path} failed after retry")
 
