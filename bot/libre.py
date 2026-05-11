@@ -366,6 +366,111 @@ def analyse_meal_response(meal_ts_local: datetime) -> dict:
     }
 
 
+# ─────────────────────── Weekly aggregation ───────────────────────
+
+
+def _meal_response_row(d: date, meal: dict) -> dict | None:
+    """
+    Build one row {meal context + postprandial response} or None if
+    the meal has no usable timestamp.
+    """
+    t = meal.get("time")
+    if not t:
+        return None
+    try:
+        hh, mm = (int(x) for x in t.split(":")[:2])
+    except Exception:
+        return None
+    meal_ts = datetime(d.year, d.month, d.day, hh, mm, tzinfo=LOCAL_TZ)
+
+    row = {
+        "date": d.isoformat(),
+        "time": t,
+        "hour": hh,
+        "description": meal.get("description"),
+        "calories": meal.get("calories"),
+        "protein_g": meal.get("protein"),
+        "fat_g": meal.get("fat"),
+        "carbs_g": meal.get("carbs"),
+        "fiber_g": meal.get("fiber"),
+        "glycemic_index": meal.get("glycemic_index"),
+        "response": analyse_meal_response(meal_ts),
+    }
+    return row
+
+
+def build_weekly_data(end_date: date | None = None) -> dict:
+    """
+    Collect 7 days of meals × postprandial responses + day context.
+    Returns a structured dict ready to feed into an LLM.
+    """
+    end = end_date or _today_local()
+    start = end - timedelta(days=6)
+
+    # Pull all glucose readings for the whole week up front, for week stats.
+    week_start_local = datetime(start.year, start.month, start.day, 0, 0, tzinfo=LOCAL_TZ)
+    week_end_local = datetime(end.year, end.month, end.day, 23, 59, tzinfo=LOCAL_TZ)
+    week_readings = get_window(week_start_local, week_end_local)
+    week_stats = window_stats(week_readings)
+
+    if week_readings:
+        vals = [float(r["mmol_l"]) for r in week_readings]
+        mean = week_stats["mean"]
+        # Coefficient of variation: lower = more stable
+        if mean > 0:
+            sd = (sum((v - mean) ** 2 for v in vals) / len(vals)) ** 0.5
+            week_stats["cv_pct"] = round(100 * sd / mean, 1)
+        week_stats["episodes_above_10"] = sum(1 for v in vals if v >= 10.0)
+        week_stats["episodes_below_3_9"] = sum(1 for v in vals if v < 3.9)
+
+    # Per-day meals + context
+    days = []
+    meal_rows = []
+    cur = start
+    while cur <= end:
+        log_row = db.get_log(cur.isoformat())
+        meals = log_row.get("meals") or []
+        training = log_row.get("training") or []
+        sleep = log_row.get("sleep") or {}
+
+        day_meal_rows = []
+        for m in meals:
+            row = _meal_response_row(cur, m)
+            if row:
+                day_meal_rows.append(row)
+                meal_rows.append(row)
+
+        days.append({
+            "date": cur.isoformat(),
+            "weekday": cur.strftime("%A"),
+            "meal_count": len(day_meal_rows),
+            "workout_done": bool(training),
+            "workout_types": [t.get("type") for t in training] if training else [],
+            "sleep_hours": sleep.get("hours"),
+            "sleep_quality": sleep.get("quality"),
+            "weight_morning": log_row.get("weight_morning"),
+        })
+        cur += timedelta(days=1)
+
+    # Coverage stats — how many meals actually had postprandial readings
+    total_meals = len(meal_rows)
+    meals_with_data = sum(1 for r in meal_rows if r["response"].get("available"))
+
+    return {
+        "period": {"start": start.isoformat(), "end": end.isoformat(), "days": 7},
+        "week_stats": week_stats,
+        "data_coverage": {
+            "total_meals_logged": total_meals,
+            "meals_with_glucose_response": meals_with_data,
+            "coverage_pct": (
+                round(100 * meals_with_data / total_meals) if total_meals else 0
+            ),
+        },
+        "days": days,
+        "meals": meal_rows,
+    }
+
+
 # ─────────────────────── Chart ────────────────────────────────────
 
 

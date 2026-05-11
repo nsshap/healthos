@@ -42,6 +42,7 @@ from context import build_system_prompt
 from tools import TOOLS, handle_tool, resolve_food_items, log_food_items_bulk
 import oura as oura_module
 import libre as libre_module
+import glucose_review
 import research_scout
 
 # Tools that need async dispatch via libre.handle_tool
@@ -97,6 +98,7 @@ HELP_TEXT = """\
 /labs <данные> — загрузить анализы (Analyst)
 /oura [дата] — синхронизировать данные с кольцом
 /glucose [часов] — график глюкозы из Libre 3 (по умолчанию 12ч)
+/glucose\\_weekly — недельный анализ реакций на еду (авто в вс 09:00)
 /recipes — список всех сохранённых рецептов
 /crisis <ситуация> — кризисная поддержка (Behaviorist)
 /digest — научный дайджест недели
@@ -592,6 +594,19 @@ async def cmd_oura(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await _send_reply(update, reply)
 
 
+async def cmd_glucose_weekly(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Manually trigger the weekly CGM analysis."""
+    if not _allowed(update):
+        return
+    await update.effective_chat.send_action("typing")
+    try:
+        text = await glucose_review.generate_weekly_review(client)
+    except Exception as e:
+        log.exception("glucose weekly review failed: %s", e)
+        text = f"Не удалось сгенерировать отчёт: {e}"
+    await _send(update, text)
+
+
 async def cmd_glucose(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     """Show glucose chart from Libre 3 + brief interpretation."""
     if not _allowed(update):
@@ -832,6 +847,25 @@ async def _glucose_sync_job(context: ContextTypes.DEFAULT_TYPE):
         log.warning("Libre sync error: %s", e)
 
 
+async def _glucose_weekly_job(context: ContextTypes.DEFAULT_TYPE):
+    """Sunday 09:00 (Amsterdam): post the weekly CGM analysis to allowed users."""
+    log.info("Glucose weekly review: generating")
+    try:
+        text = await glucose_review.generate_weekly_review(client)
+    except Exception as e:
+        log.error("Glucose weekly review failed: %s", e)
+        text = f"Не удалось сгенерировать недельный анализ глюкозы: {e}"
+
+    header = "*Недельный анализ глюкозы*\n\n"
+    for uid in ALLOWED_IDS:
+        try:
+            await context.bot.send_message(
+                uid, header + text, parse_mode="Markdown"
+            )
+        except Exception as exc:
+            log.warning("Could not deliver glucose weekly to %s: %s", uid, exc)
+
+
 async def _research_scout_job(context: ContextTypes.DEFAULT_TYPE):
     """Ежедневный скаутинг научных источников (05:00 UTC)."""
     log.info("Research Scout: запуск")
@@ -902,6 +936,7 @@ def main():
     app.add_handler(CommandHandler("labs", cmd_labs))
     app.add_handler(CommandHandler("oura", cmd_oura))
     app.add_handler(CommandHandler("glucose", cmd_glucose))
+    app.add_handler(CommandHandler("glucose_weekly", cmd_glucose_weekly))
     app.add_handler(CommandHandler("recipes", cmd_recipes))
     app.add_handler(CommandHandler("crisis", cmd_crisis))
     app.add_handler(CommandHandler("role", cmd_role))
@@ -918,6 +953,12 @@ def main():
     # for any on-demand chart / postprandial query.
     app.job_queue.run_repeating(
         _glucose_sync_job, interval=timedelta(minutes=15), first=30
+    )
+    # Weekly CGM analysis — Sunday 09:00 Europe/Amsterdam.
+    app.job_queue.run_daily(
+        _glucose_weekly_job,
+        time=dt_time(9, 0, tzinfo=ZoneInfo("Europe/Amsterdam")),
+        days=(6,),  # Sunday
     )
     app.job_queue.run_daily(
         _research_scout_job,
