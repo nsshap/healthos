@@ -135,9 +135,23 @@ def _save_session(s: _Session) -> None:
 # ─────────────────────── Auth ─────────────────────────────────────
 
 
+def _mask_email(e: str) -> str:
+    """'natka@toloka.ai' -> 'na***@toloka.ai' for safe logging."""
+    if "@" not in e:
+        return "***"
+    name, dom = e.split("@", 1)
+    return f"{name[:2]}***@{dom}"
+
+
 async def _login(client: httpx.AsyncClient) -> _Session:
     email, password = _credentials()
     api_base = DEFAULT_API_BASE
+
+    log.info(
+        "LibreLinkUp login: email=%s password_len=%d",
+        _mask_email(email),
+        len(password),
+    )
 
     # Up to 2 attempts: the first may return a region redirect.
     for _ in range(2):
@@ -148,8 +162,25 @@ async def _login(client: httpx.AsyncClient) -> _Session:
         )
         r.raise_for_status()
         payload = r.json()
-        if payload.get("status") not in (0, None):
-            raise RuntimeError(f"Libre login failed: {payload}")
+        status = payload.get("status")
+
+        if status == 2:
+            raise RuntimeError(
+                f"LibreLinkUp отклонил креды для {_mask_email(email)}. "
+                "Проверь в Railway: LIBRE_EMAIL/LIBRE_PASSWORD должны быть от "
+                "ВТОРОГО аккаунта (LibreLinkUp), который ты регистрировала отдельным "
+                "приложением и которому расшарила сенсор из основного LibreLink. "
+                "Если использовала +alias (foo+libre@gmail.com) — проверь, что и при "
+                "регистрации, и в Railway точно одинаковое написание, без лишних пробелов."
+            )
+        if status == 4:
+            raise RuntimeError(
+                f"LibreLinkUp аккаунт заблокирован или требует подтверждения условий. "
+                f"Зайди в LibreLinkUp на телефоне ({_mask_email(email)}) и пройди шаги. "
+                f"Полный ответ: {payload}"
+            )
+        if status not in (0, None):
+            raise RuntimeError(f"Libre login failed (status={status}): {payload}")
 
         data = payload.get("data", {})
 
