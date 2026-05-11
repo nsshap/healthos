@@ -161,6 +161,62 @@ def get_oura(d: str) -> dict:
     return r.data[0]["data"] if r.data else {}
 
 
+# ─────────────────────── Glucose (Libre) ──────────────────────
+
+
+def upsert_glucose(readings: list[dict]) -> int:
+    """
+    Bulk upsert CGM readings. Each reading must have keys:
+    ts (ISO str, UTC), mg_dl, mmol_l, trend (optional), source (optional).
+    Returns number of rows upserted.
+    """
+    if not readings:
+        return 0
+    payload = [
+        {
+            "ts": r["ts"],
+            "mg_dl": r["mg_dl"],
+            "mmol_l": r["mmol_l"],
+            "trend": r.get("trend"),
+            "source": r.get("source", "libre3"),
+        }
+        for r in readings
+    ]
+    r = (
+        get_client()
+        .table("glucose_readings")
+        .upsert(payload, on_conflict="ts")
+        .execute()
+    )
+    return len(r.data or [])
+
+
+def get_glucose_window(start_iso: str, end_iso: str) -> list[dict]:
+    """Return all readings with start_iso <= ts <= end_iso, oldest first."""
+    r = (
+        get_client()
+        .table("glucose_readings")
+        .select("*")
+        .gte("ts", start_iso)
+        .lte("ts", end_iso)
+        .order("ts")
+        .execute()
+    )
+    return r.data or []
+
+
+def get_latest_glucose() -> dict | None:
+    r = (
+        get_client()
+        .table("glucose_readings")
+        .select("*")
+        .order("ts", desc=True)
+        .limit(1)
+        .execute()
+    )
+    return r.data[0] if r.data else None
+
+
 # ─────────────────────── Research Items ───────────────────────
 
 

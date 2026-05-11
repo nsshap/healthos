@@ -84,3 +84,18 @@ CREATE TABLE IF NOT EXISTS biomarkers (
 CREATE TRIGGER biomarkers_updated_at
     BEFORE UPDATE ON biomarkers
     FOR EACH ROW EXECUTE FUNCTION update_updated_at();
+
+-- ─── Glucose Readings (Libre 3 via LibreLinkUp) ─────────────────────────────────
+-- One row per CGM reading (Libre 3 produces ~96/day, every ~15 min).
+-- mg_dl is the source value from Abbott API; mmol_l = mg_dl / 18.0182.
+
+CREATE TABLE IF NOT EXISTS glucose_readings (
+    id      BIGSERIAL PRIMARY KEY,
+    ts      TIMESTAMPTZ NOT NULL UNIQUE,   -- reading timestamp (UTC)
+    mg_dl   NUMERIC NOT NULL,
+    mmol_l  NUMERIC NOT NULL,
+    trend   TEXT,                          -- 'falling_fast' | 'falling' | 'stable' | 'rising' | 'rising_fast'
+    source  TEXT DEFAULT 'libre3'
+);
+
+CREATE INDEX IF NOT EXISTS idx_glucose_ts ON glucose_readings (ts DESC);

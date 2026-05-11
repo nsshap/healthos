@@ -21,7 +21,7 @@ import base64
 import logging
 import os
 from collections import defaultdict
-from datetime import time as dt_time
+from datetime import time as dt_time, timedelta
 from zoneinfo import ZoneInfo
 
 from dotenv import load_dotenv
@@ -41,7 +41,11 @@ load_dotenv()
 from context import build_system_prompt
 from tools import TOOLS, handle_tool, resolve_food_items, log_food_items_bulk
 import oura as oura_module
+import libre as libre_module
 import research_scout
+
+# Tools that need async dispatch via libre.handle_tool
+_LIBRE_TOOLS = {"sync_glucose", "get_glucose_now", "glucose_around_meal", "glucose_chart"}
 
 # ─────────────────────────── Config ───────────────────────────
 
@@ -92,6 +96,7 @@ HELP_TEXT = """\
 /strategy — стратегический review (CMO)
 /labs <данные> — загрузить анализы (Analyst)
 /oura [дата] — синхронизировать данные с кольцом
+/glucose [часов] — график глюкозы из Libre 3 (по умолчанию 12ч)
 /recipes — список всех сохранённых рецептов
 /crisis <ситуация> — кризисная поддержка (Behaviorist)
 /digest — научный дайджест недели
@@ -119,9 +124,23 @@ async def _send(update: Update, text: str):
         await update.message.reply_text(chunk, parse_mode="Markdown")
 
 
-async def _claude(user_id: int, content: "str | list", role: str) -> str:
+async def _send_reply(update: Update, reply: tuple[str, list[tuple[bytes, str]]]):
+    """Send a (text, charts) reply from _claude — charts first, then text."""
+    text, charts = reply
+    for png, caption in charts:
+        try:
+            await update.message.reply_photo(photo=png, caption=caption or None)
+        except Exception as e:
+            log.warning("Failed to send chart photo: %s", e)
+    if text and text.strip():
+        await _send(update, text)
+
+
+async def _claude(user_id: int, content: "str | list", role: str) -> tuple[str, list[tuple[bytes, str]]]:
     """
-    Call OpenAI with function-calling loop. Returns the final text response.
+    Call OpenAI with function-calling loop.
+    Returns (final_text, outgoing_charts) where outgoing_charts is a list of
+    (png_bytes, caption) tuples for the bot to send as photos.
     content can be a plain string or a multimodal list (for images).
     Maintains per-user conversation history.
     """
@@ -133,6 +152,8 @@ async def _claude(user_id: int, content: "str | list", role: str) -> str:
         _history[user_id] = history
 
     system = build_system_prompt(role)
+
+    outgoing_charts: list[tuple[bytes, str]] = []
 
     # Agentic function-calling loop
     while True:
@@ -167,6 +188,8 @@ async def _claude(user_id: int, content: "str | list", role: str) -> str:
                 log.info("Tool call: %s %s", tc.function.name, args)
                 if tc.function.name == "sync_oura":
                     result = await oura_module.handle_tool(args)
+                elif tc.function.name in _LIBRE_TOOLS:
+                    result = await libre_module.handle_tool(tc.function.name, args)
                 else:
                     result = handle_tool(tc.function.name, args)
 
@@ -184,6 +207,23 @@ async def _claude(user_id: int, content: "str | list", role: str) -> str:
                         "role": "tool",
                         "tool_call_id": tc.id,
                         "content": f"Файл загружен: {result.get('filename')} ({len(result['data'])} стр.). Изображения переданы в чат для анализа.",
+                    })
+                elif isinstance(result, dict) and result.get("type") == "chart":
+                    # Outgoing chart: queue PNG to be sent to the user, hide b64 from the model
+                    outgoing_charts.append((
+                        base64.standard_b64decode(result["png_b64"]),
+                        result.get("caption", ""),
+                    ))
+                    summary = {
+                        "chart_sent": True,
+                        "caption": result.get("caption"),
+                        "stats": result.get("stats"),
+                        "meals_overlaid": result.get("meals_overlaid"),
+                    }
+                    history.append({
+                        "role": "tool",
+                        "tool_call_id": tc.id,
+                        "content": json.dumps(summary, ensure_ascii=False),
                     })
                 else:
                     history.append(
@@ -206,7 +246,7 @@ async def _claude(user_id: int, content: "str | list", role: str) -> str:
         else:
             text = message.content or "..."
             history.append({"role": "assistant", "content": text})
-            return text
+            return text, outgoing_charts
 
 
 # ─────────────────────────── Handlers ─────────────────────────
@@ -231,7 +271,7 @@ async def cmd_daily(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         "Потом покажи: сон из Oura, readiness score, бюджет на сегодня (калории, белок) и план тренировки.",
         "coach",
     )
-    await _send(update, reply)
+    await _send_reply(update, reply)
 
 
 async def cmd_status(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -245,7 +285,7 @@ async def cmd_status(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         "Покажи сводку дня: что съедено, остаток бюджета, тренировка выполнена?",
         _role[uid],
     )
-    await _send(update, reply)
+    await _send_reply(update, reply)
 
 
 async def cmd_review(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -261,7 +301,7 @@ async def cmd_review(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         "Сделай недельную ревизию: compliance по питанию и тренировкам, тренды веса, рекомендации.",
         "strategist",
     )
-    await _send(update, reply)
+    await _send_reply(update, reply)
 
 
 async def cmd_strategy(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -277,7 +317,7 @@ async def cmd_strategy(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         "Проведи стратегический review. Оцени риски по Four Horsemen, проверь актуальность директив.",
         "cmo",
     )
-    await _send(update, reply)
+    await _send_reply(update, reply)
 
 
 async def cmd_labs(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -296,7 +336,7 @@ async def cmd_labs(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     await update.effective_chat.send_action("typing")
     reply = await _claude(uid, prompt, "analyst")
-    await _send(update, reply)
+    await _send_reply(update, reply)
 
 
 async def cmd_crisis(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -310,7 +350,7 @@ async def cmd_crisis(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     await update.effective_chat.send_action("typing")
     reply = await _claude(uid, prompt, "behaviorist")
-    await _send(update, reply)
+    await _send_reply(update, reply)
 
 
 async def cmd_role(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -549,7 +589,31 @@ async def cmd_oura(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         "Покажи сон, готовность, активность и Zone 2 минуты. Запиши сон в лог.",
         _role[uid],
     )
-    await _send(update, reply)
+    await _send_reply(update, reply)
+
+
+async def cmd_glucose(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Show glucose chart from Libre 3 + brief interpretation."""
+    if not _allowed(update):
+        return
+    uid = update.effective_user.id
+
+    hours = 12
+    if ctx.args:
+        try:
+            hours = max(1, min(24, int(ctx.args[0])))
+        except ValueError:
+            pass
+
+    await update.effective_chat.send_action("upload_photo")
+    reply = await _claude(
+        uid,
+        f"Покажи график глюкозы за последние {hours} часов через glucose_chart. "
+        "После графика — короткая интерпретация: среднее, % времени в диапазоне 3.9-7.8 ммоль/л, "
+        "пики и их связь с приёмами пищи (если есть), общий тренд.",
+        _role[uid],
+    )
+    await _send_reply(update, reply)
 
 
 async def handle_photo(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -584,8 +648,8 @@ async def handle_photo(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             reply = await _claude(uid, content, role)
         except Exception as e:
             log.exception("Photo (analyst) error: %s", e)
-            reply = f"Не удалось обработать фото: {e}"
-        await _send(update, reply)
+            reply = (f"Не удалось обработать фото: {e}", [])
+        await _send_reply(update, reply)
         return
 
     # Food photo → GPT-4o analyzes, then confirmation card
@@ -707,9 +771,9 @@ async def _process_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE, text:
         reply = await _claude(uid, text, role)
     except Exception as e:
         log.exception("Claude error: %s", e)
-        reply = f"Ошибка: {e}\n\nПопробуй ещё раз или /clear чтобы сбросить историю."
+        reply = (f"Ошибка: {e}\n\nПопробуй ещё раз или /clear чтобы сбросить историю.", [])
 
-    await _send(update, reply)
+    await _send_reply(update, reply)
 
 
 # ─────────────────────── Scheduled jobs ───────────────────────
@@ -758,6 +822,15 @@ async def _daily_oura_sync(context: ContextTypes.DEFAULT_TYPE):
 
 
 # ────────────────── Research Scout jobs ───────────────────────
+
+async def _glucose_sync_job(context: ContextTypes.DEFAULT_TYPE):
+    """Pull fresh CGM readings from LibreLinkUp every 15 min."""
+    try:
+        result = await libre_module.sync_recent()
+        log.info("Libre sync ok: wrote %s readings", result.get("written"))
+    except Exception as e:
+        log.warning("Libre sync error: %s", e)
+
 
 async def _research_scout_job(context: ContextTypes.DEFAULT_TYPE):
     """Ежедневный скаутинг научных источников (05:00 UTC)."""
@@ -828,6 +901,7 @@ def main():
     app.add_handler(CommandHandler("strategy", cmd_strategy))
     app.add_handler(CommandHandler("labs", cmd_labs))
     app.add_handler(CommandHandler("oura", cmd_oura))
+    app.add_handler(CommandHandler("glucose", cmd_glucose))
     app.add_handler(CommandHandler("recipes", cmd_recipes))
     app.add_handler(CommandHandler("crisis", cmd_crisis))
     app.add_handler(CommandHandler("role", cmd_role))
@@ -840,6 +914,11 @@ def main():
 
     # Scheduled jobs
     app.job_queue.run_daily(_daily_oura_sync, time=OURA_SYNC_TIME)
+    # Background CGM sync: every 15 min so glucose_readings stays fresh
+    # for any on-demand chart / postprandial query.
+    app.job_queue.run_repeating(
+        _glucose_sync_job, interval=timedelta(minutes=15), first=30
+    )
     app.job_queue.run_daily(
         _research_scout_job,
         time=dt_time(5, 0, tzinfo=ZoneInfo("UTC")),
