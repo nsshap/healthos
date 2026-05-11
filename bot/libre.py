@@ -43,10 +43,13 @@ TOKEN_CACHE = BASE / "config/libre_token.json"
 DEFAULT_API_BASE = "https://api.libreview.io"
 LOCAL_TZ = ZoneInfo("Europe/Amsterdam")
 
-# Headers required by the LLU API. Versions are what the iOS app currently sends.
+# Headers required by the LLU API. The `version` value must be ≥ whatever
+# Abbott currently sets as minimumVersion server-side — when they raise it,
+# any GET will return {"status": 920, "data": {"minimumVersion": "x.y.z"}}.
+# Last bump: 2026-05-11 (4.12.0 → 4.16.0).
 _BASE_HEADERS = {
     "product": "llu.ios",
-    "version": "4.12.0",
+    "version": "4.16.0",
     "content-type": "application/json",
     "accept-encoding": "gzip",
     "cache-control": "no-cache",
@@ -227,23 +230,37 @@ async def _api_get(client: httpx.AsyncClient, path: str) -> dict:
             log.info("LibreLinkUp 401, re-logging in")
             s = await _get_session(client, force=True)
             continue
-        if r.status_code == 403:
-            body = r.text[:500]
+        if r.status_code in (403, 401) or r.status_code >= 400:
+            body_text = r.text[:500]
+            # Try to parse Abbott's structured error.
+            try:
+                body_json = r.json()
+            except Exception:
+                body_json = {}
+            inner_status = body_json.get("status")
+            inner_data = body_json.get("data") or {}
+
+            if inner_status == 920:
+                required = inner_data.get("minimumVersion", "?")
+                raise RuntimeError(
+                    f"LibreLinkUp требует minimumVersion={required}, а мы шлём "
+                    f"version={_BASE_HEADERS['version']}. Обнови строку "
+                    f"`version` в bot/libre.py:_BASE_HEADERS на {required} (или выше) "
+                    "и перезапусти бота."
+                )
+            if r.status_code == 403:
+                raise RuntimeError(
+                    f"LibreLinkUp 403 on {path}. Abbott принял логин, но запретил "
+                    "доступ к данным. Возможные причины: "
+                    "(1) invitation от основного LibreLink ещё не accepted в "
+                    "LibreLinkUp на iPhone — проверь и нажми Accept; "
+                    "(2) обновление Terms & Conditions — открой LibreLinkUp, "
+                    "согласись; "
+                    "(3) email второго аккаунта не подтверждён. "
+                    f"Ответ Abbott: {body_text}"
+                )
             raise RuntimeError(
-                f"LibreLinkUp 403 on {path}. Это значит, что Abbott принял логин, "
-                "но запретил доступ к данным. Самые частые причины: "
-                "(1) invitation от основного LibreLink ещё не accepted во втором "
-                "приложении LibreLinkUp — открой LibreLinkUp на iPhone, "
-                "проверь badge с приглашением и нажми Accept; "
-                "(2) появилось обновление Terms & Conditions — нужно подтвердить в "
-                "LibreLinkUp; "
-                "(3) email второго аккаунта ещё не подтверждён. "
-                f"Ответ Abbott: {body}"
-            )
-        if r.status_code >= 400:
-            body = r.text[:500]
-            raise RuntimeError(
-                f"LibreLinkUp {r.status_code} on {path}: {body}"
+                f"LibreLinkUp {r.status_code} on {path}: {body_text}"
             )
         return r.json()
     raise RuntimeError(f"LibreLinkUp GET {path} failed after retry")
