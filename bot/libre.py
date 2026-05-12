@@ -286,13 +286,19 @@ async def _get_patient_id(client: httpx.AsyncClient) -> tuple[str, dict | None]:
 # ─────────────────────── Parsing ──────────────────────────────────
 
 
-def _parse_ts(ts_str: str) -> datetime:
-    """
-    LLU timestamps look like '11/14/2024 5:32:18 PM'. They are in UTC.
-    Returns a tz-aware UTC datetime.
-    """
-    dt = datetime.strptime(ts_str, "%m/%d/%Y %I:%M:%S %p")
-    return dt.replace(tzinfo=timezone.utc)
+_TS_FMT = "%m/%d/%Y %I:%M:%S %p"
+
+
+def _parse_factory_ts(ts_str: str) -> datetime:
+    """FactoryTimestamp is the sensor reading time in UTC."""
+    return datetime.strptime(ts_str, _TS_FMT).replace(tzinfo=timezone.utc)
+
+
+def _parse_local_ts(ts_str: str) -> datetime:
+    """Timestamp is the same instant as FactoryTimestamp, but expressed in the
+    user's local wall-clock time. Used only as a fallback when FactoryTimestamp
+    is missing from the payload."""
+    return datetime.strptime(ts_str, _TS_FMT).replace(tzinfo=LOCAL_TZ)
 
 
 def _measurement_to_reading(m: dict) -> dict:
@@ -300,7 +306,8 @@ def _measurement_to_reading(m: dict) -> dict:
     mg_dl = m.get("ValueInMgPerDl")
     if mg_dl is None:
         return {}
-    ts = _parse_ts(m["Timestamp"])
+    factory = m.get("FactoryTimestamp")
+    ts = _parse_factory_ts(factory) if factory else _parse_local_ts(m["Timestamp"])
     return {
         "ts": ts.isoformat(),
         "mg_dl": float(mg_dl),
