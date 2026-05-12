@@ -721,6 +721,8 @@ async def handle_photo(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     role = _role[uid]
     caption = update.message.caption or ""
+    log.info("INBOUND photo uid=%s role=%s msg_id=%s caption=%r",
+             uid, role, update.message.message_id, caption[:200])
 
     await update.effective_chat.send_action("typing")
 
@@ -796,6 +798,9 @@ async def handle_voice(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not _allowed(update):
         return
 
+    uid = update.effective_user.id
+    log.info("INBOUND voice uid=%s msg_id=%s", uid, update.message.message_id)
+
     await update.effective_chat.send_action("typing")
 
     try:
@@ -809,6 +814,7 @@ async def handle_voice(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await _send(update, "⚠️ Не удалось распознать голосовое сообщение.")
         return
 
+    log.info("INBOUND voice uid=%s transcript: %r", uid, text[:200])
     await _send(update, f"🎤 _{text}_")
     await _process_message(update, ctx, text)
 
@@ -820,6 +826,8 @@ async def handle_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     text = update.message.text or ""
     role = _role[uid]
+    log.info("INBOUND text uid=%s role=%s msg_id=%s len=%d: %r",
+             uid, role, update.message.message_id, len(text), text[:200])
     await _process_message(update, ctx, text)
 
 

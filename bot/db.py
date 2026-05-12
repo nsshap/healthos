@@ -130,8 +130,14 @@ def get_log(d: str = None) -> dict:
 
 
 def upsert_log(d: str, data: dict) -> dict:
-    """Insert or update log for date d."""
-    payload = {k: v for k, v in data.items() if k != "id"}
+    """Insert or update log for date d.
+
+    Strip `id` and `updated_at` from the payload — otherwise the stale
+    updated_at value from the prior GET roundtrips back and silently
+    overrides the BEFORE UPDATE trigger, making the column useless as
+    an audit timestamp.
+    """
+    payload = {k: v for k, v in data.items() if k not in ("id", "updated_at")}
     payload["date"] = d
     r = (
         get_client()
